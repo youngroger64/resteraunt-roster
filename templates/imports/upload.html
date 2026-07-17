@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header"><h1>{{ title }}</h1></div>
+<form method="post" enctype="multipart/form-data" class="card form-card">{% csrf_token %}
+{{ form.as_p }}<button class="btn primary">Import</button>
+</form>
+{% endblock %}

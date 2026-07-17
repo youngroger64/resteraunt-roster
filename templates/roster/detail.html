@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header print-hide">
+  <div>
+    <h1>{{ roster }}</h1>
+    <p class="muted"><span class="badge {{ roster.status }}">{{ roster.get_status_display }}</span> · {{ roster.shifts.count }} shift segments</p>
+  </div>
+  <div class="actions">
+    <button class="btn" onclick="window.print()">Print</button>
+    {% if roster.status == "draft" %}
+    <form method="post" action="{% url 'roster:publish' roster.pk %}" onsubmit="return confirm('Publish this roster?')">{% csrf_token %}
+      <button class="btn primary">Publish</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+<div class="roster-grid-wrap">
+<table class="roster-grid">
+<thead><tr><th class="employee-col">Employee</th>{% for day in days %}<th>{{ day|date:"D" }}<small>{{ day|date:"d M" }}</small></th>{% endfor %}<th>Hours</th></tr></thead>
+<tbody>
+{% regroup rows by employee.department as department_rows %}
+{% for department in department_rows %}
+<tr class="department-row"><td colspan="9">{{ department.grouper|title }}</td></tr>
+{% for row in department.list %}
+<tr>
+<td class="employee-col"><strong>{{ row.employee.full_name }}</strong><small>{{ row.employee.get_department_display }}</small></td>
+{% for cell in row.cells %}
+<td class="shift-cell">
+  {% if roster.status == "draft" %}
+  <form method="post" action="{% url 'roster:save_cell' roster.pk %}">{% csrf_token %}
+    <input type="hidden" name="employee_id" value="{{ row.employee.pk }}">
+    <input type="hidden" name="date" value="{{ cell.day|date:'Y-m-d' }}">
+    <input type="hidden" name="department" value="{{ row.employee.department }}">
+    <input class="cell-input" name="shift_text" value="{% for shift in cell.shifts %}{{ shift.start_time|time:'H:i' }}-{{ shift.end_time|time:'H:i' }}{% if not forloop.last %}, {% endif %}{% endfor %}" placeholder="OFF" aria-label="{{ row.employee.full_name }} {{ cell.day }}">
+  </form>
+  {% else %}
+    {% for shift in cell.shifts %}<div class="shift-chip">{{ shift.display_time }}</div>{% empty %}<span class="off">OFF</span>{% endfor %}
+  {% endif %}
+</td>
+{% endfor %}
+<td class="hours">{{ row.hours }}</td>
+</tr>
+{% endfor %}
+{% endfor %}
+</tbody></table>
+</div>
+<p class="muted print-hide">Edit a cell and press Enter. Split shifts: <code>12:30-15:30, 18:00-22:30</code>. Clear a cell or type OFF to remove it.</p>
+{% endblock %}

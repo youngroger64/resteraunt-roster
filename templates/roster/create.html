@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header"><div><h1>Generate a week</h1><p class="muted">Choose the Monday. Copy the latest roster for the fastest start.</p></div></div>
+<form method="post" class="card form-card">{% csrf_token %}
+  {{ form.as_p }}
+  {% if latest %}
+  <label class="check"><input type="checkbox" name="copy_latest" checked> Copy {{ latest }}</label>
+  {% endif %}
+  <div class="actions"><button class="btn primary">Create draft</button><a class="btn" href="{% url 'roster:list' %}">Cancel</a></div>
+</form>
+{% endblock %}

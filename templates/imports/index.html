@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header"><div><h1>Imports</h1><p class="muted">Turn the existing spreadsheets into working roster data.</p></div></div>
+<div class="grid-2">
+  <section class="card"><h2>Employees</h2><p>Import IDs, names and department details.</p><a class="btn primary" href="{% url 'imports:employees' %}">Import employees</a></section>
+  <section class="card"><h2>Default or historic roster</h2><p>Import a Monday-to-Sunday spreadsheet as a draft week.</p><a class="btn primary" href="{% url 'imports:roster' %}">Import roster</a></section>
+</div>
+{% endblock %}

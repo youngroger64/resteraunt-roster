@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <div><h1>Rosters</h1><p class="muted">Draft, published and previous weeks.</p></div>
+  <a class="btn primary" href="{% url 'roster:create' %}">New week</a>
+</div>
+<div class="card table-wrap"><table>
+<thead><tr><th>Week</th><th>Status</th><th>Version</th><th>Updated</th><th></th></tr></thead>
+<tbody>{% for roster in rosters %}
+<tr><td><strong>{{ roster }}</strong></td><td><span class="badge {{ roster.status }}">{{ roster.get_status_display }}</span></td><td>{{ roster.version }}</td><td>{{ roster.updated_at|date:"d M Y H:i" }}</td><td><a href="{% url 'roster:detail' roster.pk %}">Open</a></td></tr>
+{% empty %}<tr><td colspan="5">No rosters yet.</td></tr>{% endfor %}</tbody>
+</table></div>
+{% endblock %}

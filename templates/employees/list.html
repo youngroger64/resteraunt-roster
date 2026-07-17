@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <div><h1>Employees</h1><p class="muted">{{ employees|length }} matching employees</p></div>
+  <a class="btn primary" href="{% url 'employees:create' %}">Add employee</a>
+</div>
+<form class="toolbar" method="get">
+  <input name="q" value="{{ query }}" placeholder="Search name or employee ID">
+  <button class="btn">Search</button>
+</form>
+<div class="card table-wrap">
+<table>
+<thead><tr><th>Name</th><th>ID</th><th>Main area</th><th>Restaurant</th><th>Bar</th><th>Status</th><th></th></tr></thead>
+<tbody>
+{% for employee in employees %}
+<tr>
+  <td><strong>{{ employee.full_name }}</strong></td>
+  <td>{{ employee.external_id|default:"—" }}</td>
+  <td>{{ employee.get_department_display }}</td>
+  <td>{{ employee.can_work_restaurant|yesno:"Yes,No" }}</td>
+  <td>{{ employee.can_work_bar|yesno:"Yes,No" }}</td>
+  <td>{{ employee.is_active|yesno:"Active,Inactive" }}</td>
+  <td><a href="{% url 'employees:edit' employee.pk %}">Edit</a></td>
+</tr>
+{% empty %}<tr><td colspan="7">No employees yet.</td></tr>{% endfor %}
+</tbody></table></div>
+{% endblock %}

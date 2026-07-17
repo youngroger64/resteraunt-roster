@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header"><div><h1>Import roster</h1><p class="muted">Choose the Monday represented by the spreadsheet.</p></div></div>
+<form method="post" enctype="multipart/form-data" class="card form-card">{% csrf_token %}
+<label>Week begins</label><input type="date" name="week_start" required>
+{{ form.as_p }}<button class="btn primary">Import roster</button>
+</form>
+{% endblock %}
