@@ -8,6 +8,7 @@ from apps.roster.models import (
     RosterWeek,
     Shift,
     StaffingPattern,
+    CoveragePattern,
 )
 
 DAY_KEYS = ["mon","tue","wed","thu","fri","sat","sun"]
@@ -18,8 +19,28 @@ def shift_signature(shifts):
         for shift in sorted(shifts, key=lambda item: item.segment)
     )
 
+
+def _covered_slots(shift):
+    start = shift.start_time.hour * 60 + shift.start_time.minute
+    end = shift.end_time.hour * 60 + shift.end_time.minute
+    if end <= start:
+        end += 1440
+    return range((start // 30) * 30, ((end + 29) // 30) * 30, 30)
+
+
+def _median(values):
+    values = sorted(values)
+    if not values:
+        return 0
+    middle = len(values) // 2
+    if len(values) % 2:
+        return values[middle]
+    return (values[middle - 1] + values[middle]) / 2
+
+
 @transaction.atomic
 def learn_patterns():
+
     historic_weeks = list(
         RosterWeek.objects.filter(
             purpose=RosterPurpose.HISTORIC,
@@ -31,6 +52,7 @@ def learn_patterns():
 
     EmployeePattern.objects.all().delete()
     StaffingPattern.objects.all().delete()
+    CoveragePattern.objects.all().delete()
 
     # Employee patterns
     for employee in Employee.objects.filter(is_active=True):
@@ -126,8 +148,37 @@ def learn_patterns():
             confidence=confidence,
         )
 
+
+    coverage_counts = defaultdict(Counter)
+    
+    for week_id in historic_weeks:
+        per_week = Counter()
+        for shift in Shift.objects.filter(roster_week_id=week_id):
+            for slot_minute in _covered_slots(shift):
+                per_week[
+                    (shift.date.weekday(), shift.department, slot_minute)
+                ] += 1
+        for key, count in per_week.items():
+            coverage_counts[key][week_id] = count
+    
+    for (weekday, department, slot_minute), counts_by_week in coverage_counts.items():
+        counts = [counts_by_week.get(week_id, 0) for week_id in historic_weeks]
+        required = _median(counts)
+        if required < 0.5:
+            continue
+        weeks_present = sum(1 for value in counts if value > 0)
+        CoveragePattern.objects.create(
+            weekday=weekday,
+            department=department,
+            slot_minute=slot_minute,
+            average_required=Decimal(str(round(required, 2))),
+            weeks_seen=week_count,
+            confidence=round((weeks_present / week_count) * 100) if week_count else 0,
+        )
+    
     return {
         "employees": employee_results,
         "staffing_patterns": StaffingPattern.objects.count(),
+        "coverage_patterns": CoveragePattern.objects.count(),
         "historic_weeks": week_count,
     }

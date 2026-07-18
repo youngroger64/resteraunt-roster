@@ -11,6 +11,7 @@ from apps.roster.models import (
     RosterWeek,
     Shift,
     StaffingPattern,
+    CoveragePattern,
 )
 
 DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
@@ -341,6 +342,74 @@ def rank_candidates(
     return ranked
 
 
+
+def signature_slots(signature):
+    slots = set()
+    for _segment, start, end in parse_signature(signature):
+        start_minute = start.hour * 60 + start.minute
+        end_minute = end.hour * 60 + end.minute
+        if end_minute <= start_minute:
+            end_minute += 1440
+        slots.update(
+            range(
+                (start_minute // 30) * 30,
+                ((end_minute + 29) // 30) * 30,
+                30,
+            )
+        )
+    return slots
+
+
+def learned_coverage_requirements():
+    return {
+        (pattern.weekday, pattern.department, pattern.slot_minute):
+            max(1, round(float(pattern.average_required)))
+        for pattern in CoveragePattern.objects.filter(
+            confidence__gte=25,
+            average_required__gte=0.5,
+        )
+    }
+
+
+def has_coverage_deficit(
+    weekday,
+    department,
+    signature,
+    requirements,
+    planned_coverage,
+):
+    # Backward-compatible fallback before Learning has created
+    # coverage patterns.
+    if not requirements:
+        return True
+
+    relevant_slots = [
+        slot
+        for slot in signature_slots(signature)
+        if (weekday, department, slot) in requirements
+    ]
+
+    if not relevant_slots:
+        return True
+
+    return any(
+        planned_coverage.get((weekday, department, slot), 0)
+        < requirements[(weekday, department, slot)]
+        for slot in relevant_slots
+    )
+
+
+def add_planned_coverage(
+    weekday,
+    department,
+    signature,
+    planned_coverage,
+):
+    for slot in signature_slots(signature):
+        key = (weekday, department, slot)
+        planned_coverage[key] = planned_coverage.get(key, 0) + 1
+
+
 @transaction.atomic
 def generate_business_roster(target: RosterWeek, uncertain_threshold=75):
     target.purpose = RosterPurpose.WEEKLY
@@ -363,6 +432,9 @@ def generate_business_roster(target: RosterWeek, uncertain_threshold=75):
     open_count = 0
     suggestions = []
 
+    coverage_requirements = learned_coverage_requirements()
+    planned_coverage = {}
+
     staffing_patterns = StaffingPattern.objects.filter(
         confidence__gte=25,
         average_required__gte=0.5,
@@ -373,6 +445,15 @@ def generate_business_roster(target: RosterWeek, uncertain_threshold=75):
         shift_date = target.week_start + timedelta(days=staffing.weekday)
 
         for _slot_number in range(required):
+            if not has_coverage_deficit(
+                weekday=staffing.weekday,
+                department=staffing.department,
+                signature=staffing.shift_signature,
+                requirements=coverage_requirements,
+                planned_coverage=planned_coverage,
+            ):
+                continue
+
             ranked = rank_candidates(
                 roster=target,
                 patterns=patterns,
@@ -417,6 +498,12 @@ def generate_business_roster(target: RosterWeek, uncertain_threshold=75):
                     current_hours.get(best_pattern.employee_id, 0.0)
                     + worked_hours
                 )
+                add_planned_coverage(
+                    staffing.weekday,
+                    staffing.department,
+                    staffing.shift_signature,
+                    planned_coverage,
+                )
             else:
                 parsed = parse_signature(staffing.shift_signature)
                 if not parsed:
@@ -434,6 +521,12 @@ def generate_business_roster(target: RosterWeek, uncertain_threshold=75):
                     notes="Needs manager choice",
                 )
                 open_count += 1
+                add_planned_coverage(
+                    staffing.weekday,
+                    staffing.department,
+                    staffing.shift_signature,
+                    planned_coverage,
+                )
 
                 suggestions.append(
                     {

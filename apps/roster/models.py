@@ -136,3 +136,32 @@ class OpenShift(TimeStampedModel):
 
     def __str__(self):
         return f"Open {self.get_department_display()} shift {self.date} {self.display_time}"
+
+
+class CoveragePattern(TimeStampedModel):
+    weekday = models.PositiveSmallIntegerField()
+    department = models.CharField(max_length=20, choices=Department.choices)
+    slot_minute = models.PositiveSmallIntegerField()
+    average_required = models.DecimalField(max_digits=4, decimal_places=2, default=0)
+    weeks_seen = models.PositiveSmallIntegerField(default=0)
+    confidence = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ["weekday", "department", "slot_minute"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["weekday", "department", "slot_minute"],
+                name="unique_coverage_pattern",
+            )
+        ]
+
+    @property
+    def slot_label(self):
+        minute = self.slot_minute % 1440
+        return f"{minute // 60:02d}:{minute % 60:02d}"
+
+    def __str__(self):
+        return (
+            f"{self.get_department_display()} day {self.weekday} "
+            f"{self.slot_label}: {self.average_required}"
+        )

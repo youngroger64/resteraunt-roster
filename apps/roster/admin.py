@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import OpenShift, RosterWeek, Shift, StaffingPattern
+from .models import CoveragePattern, OpenShift, RosterWeek, Shift, StaffingPattern
 
 class ShiftInline(admin.TabularInline):
     model = Shift
@@ -28,3 +28,9 @@ class StaffingPatternAdmin(admin.ModelAdmin):
 class OpenShiftAdmin(admin.ModelAdmin):
     list_display = ("date", "department", "start_time", "end_time", "confidence")
     list_filter = ("date", "department")
+
+
+@admin.register(CoveragePattern)
+class CoveragePatternAdmin(admin.ModelAdmin):
+    list_display = ("weekday", "department", "slot_label", "average_required", "confidence")
+    list_filter = ("weekday", "department")
