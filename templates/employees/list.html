@@ -1,16 +1,32 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-header">
-  <div><h1>Employees</h1><p class="muted">{{ employees|length }} matching employees</p></div>
+  <div>
+    <h1>Employees</h1>
+    <p class="muted">{{ employees|length }} matching employees</p>
+  </div>
   <a class="btn primary" href="{% url 'employees:create' %}">Add employee</a>
 </div>
+
 <form class="toolbar" method="get">
   <input name="q" value="{{ query }}" placeholder="Search name or employee ID">
   <button class="btn">Search</button>
 </form>
+
 <div class="card table-wrap">
 <table>
-<thead><tr><th>Name</th><th>ID</th><th>Main area</th><th>Restaurant</th><th>Bar</th><th>Status</th><th></th></tr></thead>
+<thead>
+<tr>
+  <th>Name</th>
+  <th>ID</th>
+  <th>Area</th>
+  <th>Restaurant</th>
+  <th>Bar</th>
+  <th>Shifts</th>
+  <th>Status</th>
+  <th>Actions</th>
+</tr>
+</thead>
 <tbody>
 {% for employee in employees %}
 <tr>
@@ -19,9 +35,20 @@
   <td>{{ employee.get_department_display }}</td>
   <td>{{ employee.can_work_restaurant|yesno:"Yes,No" }}</td>
   <td>{{ employee.can_work_bar|yesno:"Yes,No" }}</td>
+  <td>{{ employee.shift_count }}</td>
   <td>{{ employee.is_active|yesno:"Active,Inactive" }}</td>
-  <td><a href="{% url 'employees:edit' employee.pk %}">Edit</a></td>
+  <td>
+    <div class="row-actions">
+      <a href="{% url 'employees:edit' employee.pk %}">Edit</a>
+      <a href="{% url 'employees:merge' employee.pk %}">Merge</a>
+      <a class="danger-link" href="{% url 'employees:delete' employee.pk %}">Delete</a>
+    </div>
+  </td>
 </tr>
-{% empty %}<tr><td colspan="7">No employees yet.</td></tr>{% endfor %}
-</tbody></table></div>
+{% empty %}
+<tr><td colspan="8">No employees yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
 {% endblock %}

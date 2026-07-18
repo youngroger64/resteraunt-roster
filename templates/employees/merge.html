@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Merge {{ source.full_name }}</h1>
+    <p class="muted">{{ shift_count }} shift record{{ shift_count|pluralize }} will be moved.</p>
+  </div>
+</div>
+
+<form method="post" class="card form-card">
+  {% csrf_token %}
+
+  <div class="merge-summary">
+    <div>
+      <small>Duplicate to remove</small>
+      <strong>{{ source.full_name }}</strong>
+    </div>
+    <span>→</span>
+    <div>
+      <small>Employee to keep</small>
+      {{ form.target_employee }}
+    </div>
+  </div>
+
+  <div class="field-block">
+    <label>{{ form.conflict_choice.label }}</label>
+    {{ form.conflict_choice }}
+    <p class="muted">A conflict means both names have a shift on the same day and segment.</p>
+  </div>
+
+  {% if form.errors %}
+    <div class="alert error">{{ form.errors }}</div>
+  {% endif %}
+
+  <div class="actions">
+    <button class="btn primary">Merge employees</button>
+    <a class="btn" href="{% url 'employees:list' %}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

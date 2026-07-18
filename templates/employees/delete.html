@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Remove {{ employee.full_name }}?</h1>
+    <p class="muted">{{ shift_count }} shift record{{ shift_count|pluralize }} linked to this employee.</p>
+  </div>
+</div>
+
+<div class="card form-card">
+  {% if shift_count %}
+    <h2>Choose what happens</h2>
+
+    <form method="post" class="choice-block">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="deactivate">
+      <strong>Keep the history</strong>
+      <p class="muted">Hide the employee from future rosters. Existing shifts remain.</p>
+      <button class="btn primary">Deactivate</button>
+    </form>
+
+    <form method="post" class="choice-block danger-choice" onsubmit="return confirm('Delete this employee and all linked shifts?')">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="delete">
+      <strong>Delete everything</strong>
+      <p class="muted">Remove the employee, their shifts and learned pattern permanently.</p>
+      <button class="btn danger">Delete employee and shifts</button>
+    </form>
+
+    <div class="choice-block">
+      <strong>Duplicate?</strong>
+      <p class="muted">Move the shift history to the correct employee instead.</p>
+      <a class="btn" href="{% url 'employees:merge' employee.pk %}">Merge duplicate</a>
+    </div>
+  {% else %}
+    <p>This employee has no shifts.</p>
+    <form method="post" onsubmit="return confirm('Delete this employee?')">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="delete">
+      <button class="btn danger">Delete employee</button>
+      <a class="btn" href="{% url 'employees:list' %}">Cancel</a>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
