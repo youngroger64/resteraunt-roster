@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import RosterWeek, Shift
+from .models import OpenShift, RosterWeek, Shift, StaffingPattern
 
 class ShiftInline(admin.TabularInline):
     model = Shift

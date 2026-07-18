@@ -42,3 +42,52 @@ code{background:#eef2f7;padding:2px 5px;border-radius:5px}
 .open-shift-row span{color:var(--muted)}
 .open-shift-row form{display:grid;grid-template-columns:1fr auto;gap:8px}
 @media(max-width:800px){.open-shift-row{grid-template-columns:1fr}.open-shift-row form{grid-template-columns:1fr}}
+
+.compact-header{margin-bottom:14px}
+.compact-roster .roster-grid{table-layout:fixed;min-width:920px}
+.compact-roster .employee-col{min-width:145px;width:145px}
+.compact-roster .shift-cell{min-width:105px;height:42px}
+.compact-roster .cell-input{height:42px;padding:5px 4px;font-size:12px}
+.compact-roster th{padding:7px 4px;font-size:11px}
+.compact-roster td{font-size:12px}
+.compact-roster .employee-col{padding:6px 8px!important}
+.compact-roster .department-row td{padding:5px 8px}
+.compact-roster .hours{padding:4px!important;width:46px}
+.compact-roster .shift-chip{font-size:11px;padding:2px}
+.roster-help{margin-top:8px}
+.empty-state{max-width:680px}
+
+@media print{
+  @page{size:A4 landscape;margin:7mm}
+  body{background:#fff}
+  .content{padding:0!important}
+  .roster-grid-wrap{overflow:visible;border:0}
+  .compact-roster .roster-grid{
+    width:100%!important;
+    min-width:0!important;
+    table-layout:fixed;
+    font-size:7.5px;
+  }
+  .compact-roster .employee-col{
+    position:static!important;
+    width:18%!important;
+    min-width:0!important;
+  }
+  .compact-roster th,
+  .compact-roster td{
+    padding:2px!important;
+    white-space:normal!important;
+  }
+  .compact-roster .shift-cell{height:22px!important;min-width:0!important}
+  .compact-roster .cell-input{
+    height:22px!important;
+    font-size:7px!important;
+    padding:1px!important;
+  }
+  .compact-roster .shift-chip{font-size:7px!important;padding:0!important}
+  .compact-roster .department-row td{
+    font-size:8px!important;
+    padding:2px 4px!important;
+  }
+  .compact-roster .hours{width:5%!important}
+}

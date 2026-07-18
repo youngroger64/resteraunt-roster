@@ -15,14 +15,27 @@ DAY_KEYS = ["mon","tue","wed","thu","fri","sat","sun"]
 def parse_signature(text):
     if not text or text == "OFF":
         return []
+
     result = []
     for segment, part in enumerate(text.split(","), start=1):
-        start, end = [value.strip() for value in part.split("-", 1)]
-        result.append((
-            segment,
-            datetime.strptime(start, "%H:%M").time(),
-            datetime.strptime(end, "%H:%M").time(),
-        ))
+        start_text, end_text = [
+            value.strip() for value in part.split("-", 1)
+        ]
+        start = datetime.strptime(start_text, "%H:%M").time()
+        end = datetime.strptime(end_text, "%H:%M").time()
+
+        # Old imported shorthand may contain 18:00-10:00 or 17:00-10:00.
+        # Interpret an unsuffixed end before the evening start as PM.
+        if (
+            start.hour >= 12
+            and end.hour <= 12
+            and end.hour != 0
+            and end.hour <= start.hour
+        ):
+            end = end.replace(hour=(end.hour + 12) % 24)
+
+        result.append((segment, start, end))
+
     return result
 
 def compatible(employee, department):
@@ -146,3 +159,26 @@ def generate_business_roster(target: RosterWeek, uncertain_threshold=75):
         "open": open_count,
         "suggestions": suggestions,
     }
+
+
+@transaction.atomic
+def copy_roster(source: RosterWeek, target: RosterWeek) -> int:
+    day_delta = target.week_start - source.week_start
+    copied_shifts = []
+    for old_shift in source.shifts.select_related("employee"):
+        copied_shifts.append(
+            Shift(
+                roster_week=target,
+                employee=old_shift.employee,
+                department=old_shift.department,
+                date=old_shift.date + day_delta,
+                start_time=old_shift.start_time,
+                end_time=old_shift.end_time,
+                segment=old_shift.segment,
+                source="copied",
+                confidence=90,
+                notes=old_shift.notes,
+            )
+        )
+    Shift.objects.bulk_create(copied_shifts)
+    return len(copied_shifts)

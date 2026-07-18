@@ -1,6 +1,7 @@
 from datetime import timedelta
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.db.models import Case, IntegerField, Value, When
 from django.http import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from apps.employees.models import Department, Employee
@@ -73,29 +74,81 @@ def generate_pattern_roster(request):
 def roster_detail(request, pk):
     roster = get_object_or_404(RosterWeek, pk=pk)
     days = [roster.week_start + timedelta(days=i) for i in range(7)]
-    shift_map, hours = {}, {}
-    for shift in roster.shifts.select_related("employee"):
-        shift_map.setdefault((shift.employee_id, shift.date), []).append(shift)
-        hours[shift.employee_id] = hours.get(shift.employee_id, 0) + shift.duration_hours
 
-open_shifts = list(roster.open_shifts.all())
-open_suggestions = request.session.get(f"open_suggestions_{roster.pk}", [])
+    shifts = list(roster.shifts.select_related("employee"))
+    shift_map = {}
+    employee_hours = {}
+    scheduled_employee_ids = set()
+
+    for shift in shifts:
+        shift_map.setdefault((shift.employee_id, shift.date), []).append(shift)
+        employee_hours[shift.employee_id] = (
+            employee_hours.get(shift.employee_id, 0) + shift.duration_hours
+        )
+        scheduled_employee_ids.add(shift.employee_id)
+
+    show_all = request.GET.get("show") == "all"
+
+    employees = Employee.objects.filter(is_active=True)
+    if not show_all:
+        employees = employees.filter(pk__in=scheduled_employee_ids)
+
+    employees = employees.annotate(
+        area_order=Case(
+            When(department=Department.RESTAURANT, then=Value(0)),
+            When(department=Department.BAR, then=Value(1)),
+            default=Value(2),
+            output_field=IntegerField(),
+        )
+    ).order_by("area_order", "first_name", "last_name")
+
+    open_shifts = list(roster.open_shifts.all())
+    open_suggestions = request.session.get(
+        f"open_suggestions_{roster.pk}",
+        [],
+    )
     unresolved = request.session.get(f"unresolved_{roster.pk}", [])
-    unresolved_map = {(int(i["employee_id"]), i["date"]): i for i in unresolved}
+    unresolved_map = {
+        (int(item["employee_id"]), item["date"]): item
+        for item in unresolved
+    }
+
     rows = []
-    for employee in Employee.objects.filter(is_active=True):
+    for employee in employees:
         cells = []
         for day in days:
-            cells.append({
-                "day":day,
-                "shifts":shift_map.get((employee.id, day), []),
-                "issue":unresolved_map.get((employee.id, day.isoformat())),
-            })
-        rows.append({"employee":employee,"cells":cells,"hours":round(hours.get(employee.id,0),2)})
-    return render(request, "roster/detail.html", {
-        "roster":roster,"days":days,"rows":rows,
-        "departments":Department.choices,"unresolved_count":len(unresolved),"open_shifts":open_shifts,"open_suggestions":open_suggestions,
-    })
+            cells.append(
+                {
+                    "day": day,
+                    "shifts": shift_map.get((employee.id, day), []),
+                    "issue": unresolved_map.get(
+                        (employee.id, day.isoformat())
+                    ),
+                }
+            )
+        rows.append(
+            {
+                "employee": employee,
+                "cells": cells,
+                "hours": round(employee_hours.get(employee.id, 0), 2),
+            }
+        )
+
+    return render(
+        request,
+        "roster/detail.html",
+        {
+            "roster": roster,
+            "days": days,
+            "rows": rows,
+            "departments": Department.choices,
+            "unresolved_count": len(unresolved),
+            "open_shifts": open_shifts,
+            "open_suggestions": open_suggestions,
+            "show_all": show_all,
+            "scheduled_employee_count": len(scheduled_employee_ids),
+        },
+    )
 
 @login_required
 def save_cell(request, pk):

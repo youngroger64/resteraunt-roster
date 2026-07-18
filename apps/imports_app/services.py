@@ -122,6 +122,13 @@ def parse_shift_cell(value):
             start = start.replace(hour=start.hour + 12)
         if not end_suffix and end.hour <= 7:
             end = end.replace(hour=end.hour + 12)
+        elif (
+            not end_suffix
+            and start.hour >= 12
+            and end.hour <= 12
+            and end.hour <= start.hour
+        ):
+            end = end.replace(hour=(end.hour + 12) % 24)
 
         parsed.append((start, end))
 
