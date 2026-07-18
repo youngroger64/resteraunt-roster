@@ -187,3 +187,13 @@ code{background:#eef2f7;padding:2px 5px;border-radius:5px}
 @media(max-width:800px){
   .choice-grid{grid-template-columns:1fr}
 }
+
+.choice-department{margin-top:22px}
+.choice-department>h3{
+  margin:0;
+  padding:9px 12px;
+  border-radius:10px;
+  background:#eef2ff;
+  font-size:15px;
+}
+.choice-department+.choice-department{margin-top:30px}

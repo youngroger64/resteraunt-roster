@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from apps.employees.models import Department, Employee
 from .forms import GeneratePatternRosterForm, RosterWeekForm
 from .models import EmployeePattern, OpenShift, RosterPurpose, RosterStatus, RosterWeek, Shift, StaffingPattern
-from .services.generator import copy_roster, generate_business_roster, parse_signature
+from .services.generator import candidate_availability, copy_roster, generate_business_roster, parse_signature
 from .services.learner import learn_patterns
 from .services.publisher import publish_roster
 
@@ -156,11 +156,69 @@ def roster_detail(request, pk):
         )
     ).order_by("area_order", "first_name", "last_name")
 
-    open_shifts = list(roster.open_shifts.all())
     open_suggestions = request.session.get(
         f"open_suggestions_{roster.pk}",
         [],
     )
+    
+    suggestion_map = {
+        item.get("open_shift_id"): item
+        for item in open_suggestions
+    }
+    
+    open_choice_groups = {
+        Department.RESTAURANT: [],
+        Department.BAR: [],
+    }
+    
+    all_active_employees = list(
+        Employee.objects.filter(is_active=True).order_by(
+            "first_name",
+            "last_name",
+        )
+    )
+    
+    for open_shift in roster.open_shifts.all():
+        suggestion = suggestion_map.get(open_shift.pk, {})
+        available_ids = set(
+            suggestion.get("available_employee_ids", [])
+        )
+    
+        other_available = [
+            employee
+            for employee in all_active_employees
+            if employee.pk in available_ids
+        ]
+    
+        open_choice_groups.setdefault(
+            open_shift.department,
+            [],
+        ).append(
+            {
+                "shift": open_shift,
+                "suggestion": suggestion,
+                "other_available": other_available,
+            }
+        )
+    
+    open_shift_groups = [
+        {
+            "department": Department.RESTAURANT,
+            "label": "Restaurant",
+            "items": open_choice_groups.get(
+                Department.RESTAURANT,
+                [],
+            ),
+        },
+        {
+            "department": Department.BAR,
+            "label": "Bar",
+            "items": open_choice_groups.get(
+                Department.BAR,
+                [],
+            ),
+        },
+    ]
     unresolved = request.session.get(f"unresolved_{roster.pk}", [])
     unresolved_map = {
         (int(item["employee_id"]), item["date"]): item
@@ -197,7 +255,7 @@ def roster_detail(request, pk):
             "rows": rows,
             "departments": Department.choices,
             "unresolved_count": len(unresolved),
-            "open_shifts": open_shifts,
+            "open_shift_groups": open_shift_groups,
             "open_suggestions": open_suggestions,
             "show_all": show_all,
             "scheduled_employee_count": len(scheduled_employee_ids),
@@ -258,6 +316,30 @@ def roster_publish(request, pk):
     return redirect("roster:detail", pk=pk)
 
 
+
+def _employee_can_take_open_shift(roster, open_shift, employee):
+    if open_shift.department == Department.BAR:
+        if not employee.can_work_bar:
+            return False, "This employee cannot work Bar."
+    elif not employee.can_work_restaurant:
+        return False, "This employee cannot work Restaurant."
+
+    availability = candidate_availability(
+        roster=roster,
+        employee=employee,
+        shift_date=open_shift.date,
+        signature=(
+            open_shift.source_signature
+            or open_shift.display_time.replace("–", "-")
+        ),
+    )
+
+    if not availability["available"]:
+        return False, availability["reason"]
+
+    return True, availability["reason"]
+
+
 @login_required
 def assign_open_shift(request, pk, open_shift_id):
     if request.method != "POST":
@@ -265,6 +347,19 @@ def assign_open_shift(request, pk, open_shift_id):
     roster = get_object_or_404(RosterWeek, pk=pk)
     open_shift = get_object_or_404(OpenShift, pk=open_shift_id, roster_week=roster)
     employee = get_object_or_404(Employee, pk=request.POST["employee_id"])
+
+    allowed, reason = _employee_can_take_open_shift(
+        roster,
+        open_shift,
+        employee,
+    )
+    if not allowed:
+        messages.warning(
+            request,
+            f"{employee.full_name} is not available: {reason}",
+        )
+        return redirect("roster:detail", pk=pk)
+
 
     parts = parse_signature(open_shift.source_signature or open_shift.display_time.replace("–", "-"))
     for segment, start, end in parts:
@@ -296,6 +391,19 @@ def assign_suggested_employee(request, pk, open_shift_id, employee_id):
         roster_week=roster,
     )
     employee = get_object_or_404(Employee, pk=employee_id)
+
+    allowed, reason = _employee_can_take_open_shift(
+        roster,
+        open_shift,
+        employee,
+    )
+    if not allowed:
+        messages.warning(
+            request,
+            f"{employee.full_name} is not available: {reason}",
+        )
+        return redirect("roster:detail", pk=pk)
+
 
     parts = parse_signature(
         open_shift.source_signature
