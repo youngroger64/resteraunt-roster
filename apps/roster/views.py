@@ -46,29 +46,83 @@ def pattern_list(request):
 @login_required
 def generate_pattern_roster(request):
     form = GeneratePatternRosterForm(request.POST or None)
+
     if request.method == "POST" and form.is_valid():
-        roster, created_new = RosterWeek.objects.get_or_create(
-            week_start=form.cleaned_data["week_start"],
-            defaults={"purpose": RosterPurpose.WEEKLY},
-        )
-        if not created_new and (roster.shifts.exists() or roster.open_shifts.exists()):
+        week_start = form.cleaned_data["week_start"]
+        existing = RosterWeek.objects.filter(week_start=week_start).first()
+        replace_existing = request.POST.get("replace_existing") == "yes"
+
+        if existing and not replace_existing:
             return render(
                 request,
                 "roster/generate_patterns.html",
-                {"form": form, "existing_roster": roster},
+                {
+                    "form": form,
+                    "existing_roster": existing,
+                },
             )
 
-        threshold = 0 if form.cleaned_data["uncertain_choice"] == "best" else 75
-        result = generate_business_roster(roster, uncertain_threshold=threshold)
-        request.session[f"open_suggestions_{roster.pk}"] = result["suggestions"]
-        messages.success(
-            request,
-            f"Generated {result['created']} assigned shift segments. "
-            f"{result['open']} shifts need a manager choice.",
+        if existing:
+            if existing.status == RosterStatus.PUBLISHED:
+                messages.error(
+                    request,
+                    "That roster is published. Choose: open it, or create another week.",
+                )
+                return render(
+                    request,
+                    "roster/generate_patterns.html",
+                    {
+                        "form": form,
+                        "existing_roster": existing,
+                        "published_existing": True,
+                    },
+                )
+
+            roster = existing
+            roster.shifts.all().delete()
+            roster.open_shifts.all().delete()
+            request.session.pop(f"open_suggestions_{roster.pk}", None)
+            request.session.pop(f"unresolved_{roster.pk}", None)
+        else:
+            roster = RosterWeek.objects.create(
+                week_start=week_start,
+                purpose=RosterPurpose.WEEKLY,
+            )
+
+        threshold = (
+            0
+            if form.cleaned_data["uncertain_choice"] == "best"
+            else 75
         )
+
+        result = generate_business_roster(
+            roster,
+            uncertain_threshold=threshold,
+        )
+        request.session[f"open_suggestions_{roster.pk}"] = result[
+            "suggestions"
+        ]
+
+        if existing:
+            messages.success(
+                request,
+                f"Draft replaced with {result['created']} assigned shift segments. "
+                f"{result['open']} shifts need a choice.",
+            )
+        else:
+            messages.success(
+                request,
+                f"Generated {result['created']} assigned shift segments. "
+                f"{result['open']} shifts need a choice.",
+            )
+
         return redirect("roster:detail", pk=roster.pk)
 
-    return render(request, "roster/generate_patterns.html", {"form": form})
+    return render(
+        request,
+        "roster/generate_patterns.html",
+        {"form": form},
+    )
 
 @login_required
 def roster_detail(request, pk):
@@ -228,3 +282,124 @@ def assign_open_shift(request, pk, open_shift_id):
     open_shift.delete()
     messages.success(request, f"Assigned to {employee.full_name}.")
     return redirect("roster:detail", pk=pk)
+
+
+@login_required
+def assign_suggested_employee(request, pk, open_shift_id, employee_id):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+
+    roster = get_object_or_404(RosterWeek, pk=pk)
+    open_shift = get_object_or_404(
+        OpenShift,
+        pk=open_shift_id,
+        roster_week=roster,
+    )
+    employee = get_object_or_404(Employee, pk=employee_id)
+
+    parts = parse_signature(
+        open_shift.source_signature
+        or open_shift.display_time.replace("–", "-")
+    )
+
+    for segment, start, end in parts:
+        Shift.objects.create(
+            roster_week=roster,
+            employee=employee,
+            department=open_shift.department,
+            date=open_shift.date,
+            start_time=start,
+            end_time=end,
+            segment=segment,
+            source="manager_choice",
+            confidence=100,
+        )
+
+    open_shift.delete()
+    messages.success(request, f"Assigned to {employee.full_name}.")
+    return redirect("roster:detail", pk=pk)
+
+
+@login_required
+def roster_delete(request, pk):
+    roster = get_object_or_404(RosterWeek, pk=pk)
+    shift_count = roster.shifts.count()
+    open_shift_count = roster.open_shifts.count()
+
+    if request.method == "POST":
+        if roster.status == RosterStatus.PUBLISHED:
+            messages.error(
+                request,
+                "Published rosters cannot be deleted here.",
+            )
+            return redirect("roster:detail", pk=roster.pk)
+
+        purpose = roster.get_purpose_display()
+        label = str(roster)
+        roster.delete()
+
+        messages.success(
+            request,
+            f"{label} deleted. Removed {shift_count} shifts "
+            f"and {open_shift_count} open shifts.",
+        )
+
+        if purpose == "Historic roster":
+            messages.info(
+                request,
+                "Run Learning again because the historic evidence changed.",
+            )
+
+        return redirect("roster:list")
+
+    return render(
+        request,
+        "roster/delete.html",
+        {
+            "roster": roster,
+            "shift_count": shift_count,
+            "open_shift_count": open_shift_count,
+        },
+    )
+
+
+@login_required
+def roster_regenerate(request, pk):
+    roster = get_object_or_404(RosterWeek, pk=pk)
+
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+
+    if roster.status == RosterStatus.PUBLISHED:
+        messages.error(
+            request,
+            "Published rosters cannot be regenerated.",
+        )
+        return redirect("roster:detail", pk=roster.pk)
+
+    if roster.purpose != RosterPurpose.WEEKLY:
+        messages.error(
+            request,
+            "Historic and base rosters are evidence. Choose: delete it, or leave it unchanged.",
+        )
+        return redirect("roster:detail", pk=roster.pk)
+
+    roster.shifts.all().delete()
+    roster.open_shifts.all().delete()
+    request.session.pop(f"open_suggestions_{roster.pk}", None)
+    request.session.pop(f"unresolved_{roster.pk}", None)
+
+    result = generate_business_roster(
+        roster,
+        uncertain_threshold=75,
+    )
+    request.session[f"open_suggestions_{roster.pk}"] = result[
+        "suggestions"
+    ]
+
+    messages.success(
+        request,
+        f"Draft regenerated. {result['created']} assigned shift segments; "
+        f"{result['open']} shifts need a choice.",
+    )
+    return redirect("roster:detail", pk=roster.pk)

@@ -1,7 +1,65 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-header"><div><h1>Rosters</h1><p class="muted">Historic evidence, base roster and weekly drafts.</p></div>
-<div class="actions"><a class="btn" href="{% url 'roster:learn' %}">Learn</a><a class="btn primary" href="{% url 'roster:generate_patterns' %}">Generate</a></div></div>
-<div class="card table-wrap"><table><thead><tr><th>Week</th><th>Use</th><th>Status</th><th>Shifts</th><th></th></tr></thead>
-<tbody>{% for roster in rosters %}<tr><td><strong>{{ roster }}</strong></td><td>{{ roster.get_purpose_display }}</td><td>{{ roster.get_status_display }}</td><td>{{ roster.shifts.count }}</td><td><a href="{% url 'roster:detail' roster.pk %}">Open</a></td></tr>{% empty %}<tr><td colspan="5">No rosters yet.</td></tr>{% endfor %}</tbody></table></div>
+<div class="page-header">
+  <div>
+    <h1>Rosters</h1>
+    <p class="muted">
+      Historic evidence, base roster and weekly drafts.
+    </p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="{% url 'roster:learn' %}">Learn</a>
+    <a class="btn primary"
+       href="{% url 'roster:generate_patterns' %}">
+      Generate
+    </a>
+  </div>
+</div>
+
+<div class="card table-wrap">
+<table>
+<thead>
+<tr>
+  <th>Week</th>
+  <th>Use</th>
+  <th>Status</th>
+  <th>Shifts</th>
+  <th>Actions</th>
+</tr>
+</thead>
+<tbody>
+{% for roster in rosters %}
+<tr>
+  <td><strong>{{ roster }}</strong></td>
+  <td>{{ roster.get_purpose_display }}</td>
+  <td>{{ roster.get_status_display }}</td>
+  <td>{{ roster.shifts.count }}</td>
+  <td>
+    <div class="row-actions">
+      <a href="{% url 'roster:detail' roster.pk %}">Open</a>
+
+      {% if roster.purpose == "weekly" and roster.status == "draft" %}
+      <form method="post"
+            action="{% url 'roster:regenerate' roster.pk %}"
+            onsubmit="return confirm('Replace this draft and generate it again?')">
+        {% csrf_token %}
+        <button class="link-button-table">Regenerate</button>
+      </form>
+      {% endif %}
+
+      {% if roster.status != "published" %}
+      <a class="danger-link"
+         href="{% url 'roster:delete' roster.pk %}">
+        Delete
+      </a>
+      {% endif %}
+    </div>
+  </td>
+</tr>
+{% empty %}
+<tr><td colspan="5">No rosters yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
 {% endblock %}

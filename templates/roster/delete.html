@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Delete {{ roster }}?</h1>
+    <p class="muted">{{ roster.get_purpose_display }}</p>
+  </div>
+</div>
+
+<div class="card form-card">
+  {% if roster.status == "published" %}
+    <h2>Published roster</h2>
+    <p>
+      This roster is protected. Choose:
+    </p>
+    <div class="actions">
+      <a class="btn primary"
+         href="{% url 'roster:detail' roster.pk %}">
+        Open roster
+      </a>
+      <a class="btn"
+         href="{% url 'roster:list' %}">
+        Cancel
+      </a>
+    </div>
+  {% else %}
+    <h2>What will be removed</h2>
+    <p>
+      {{ shift_count }} assigned shift{{ shift_count|pluralize }}
+      and {{ open_shift_count }} open shift{{ open_shift_count|pluralize }}.
+    </p>
+
+    {% if roster.purpose == "historic" %}
+      <div class="alert warning">
+        This is a historic roster. Deleting it changes the evidence used
+        by Learning. Relearn afterwards.
+      </div>
+    {% endif %}
+
+    <form method="post"
+          onsubmit="return confirm('Delete this roster permanently?')">
+      {% csrf_token %}
+      <div class="actions">
+        <button class="btn danger">Delete roster</button>
+        <a class="btn"
+           href="{% url 'roster:detail' roster.pk %}">
+          Cancel
+        </a>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}

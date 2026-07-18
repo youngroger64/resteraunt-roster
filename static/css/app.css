@@ -91,3 +91,99 @@ code{background:#eef2f7;padding:2px 5px;border-radius:5px}
   }
   .compact-roster .hours{width:5%!important}
 }
+
+.open-choice{padding:18px 0;border-bottom:1px solid var(--line)}
+.open-choice:last-child{border-bottom:0}
+.open-choice-header{display:flex;justify-content:space-between;gap:16px;margin-bottom:12px}
+.open-choice-header div{display:grid;gap:3px}
+.open-choice-header span{color:var(--muted)}
+.ranked-candidates{display:grid;gap:8px}
+.candidate-card{
+  display:grid;
+  grid-template-columns:32px 1fr auto;
+  gap:12px;
+  align-items:start;
+  padding:11px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  background:#fff;
+}
+.candidate-card:first-child{
+  border-color:#93c5fd;
+  background:#eff6ff;
+}
+.candidate-rank{
+  display:grid;
+  place-items:center;
+  width:28px;
+  height:28px;
+  border-radius:999px;
+  background:#e5e7eb;
+  font-weight:800;
+}
+.candidate-card:first-child .candidate-rank{
+  background:#2563eb;
+  color:#fff;
+}
+.candidate-copy{display:grid;gap:3px}
+.candidate-copy small{color:var(--muted)}
+.candidate-reasons{
+  margin:4px 0 0;
+  padding-left:17px;
+  color:#4b5563;
+  font-size:12px;
+}
+.candidate-reasons li{margin:1px 0}
+.other-employees{margin-top:10px}
+.other-employees summary{
+  cursor:pointer;
+  color:var(--accent);
+  font-weight:700;
+  width:max-content;
+}
+.other-employees form{
+  display:grid;
+  grid-template-columns:minmax(220px,420px) auto;
+  gap:8px;
+  margin-top:10px;
+  max-width:560px;
+}
+@media(max-width:700px){
+  .candidate-card{grid-template-columns:28px 1fr}
+  .candidate-card form{grid-column:2}
+  .other-employees form{grid-template-columns:1fr}
+}
+
+.link-button-table{
+  border:0;
+  padding:0;
+  background:transparent;
+  color:var(--accent);
+  font:inherit;
+  cursor:pointer;
+}
+.existing-roster-choice{max-width:820px}
+.choice-grid{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:12px;
+  margin-top:16px;
+}
+.choice-card{
+  display:grid;
+  align-content:start;
+  gap:8px;
+  min-height:150px;
+  padding:18px;
+  border:1px solid var(--line);
+  border-radius:14px;
+  color:var(--ink);
+  background:#fff;
+}
+.choice-card:hover{border-color:#93c5fd}
+.choice-card span{color:var(--muted)}
+.choice-card button{margin-top:auto;width:max-content}
+.danger-lite{background:#fff7f7}
+@media(max-width:800px){
+  .choice-grid{grid-template-columns:1fr}
+}

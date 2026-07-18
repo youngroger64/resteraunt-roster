@@ -147,6 +147,100 @@ def score_candidate(
     return score
 
 
+
+def candidate_reasons(
+    pattern,
+    weekday,
+    department,
+    signature,
+    current_hours,
+    current_days,
+):
+    key = DAY_KEYS[weekday]
+    probability = int(pattern.day_probabilities.get(key, 0))
+    typical = pattern.typical_shifts.get(key, {})
+    typical_signature = typical.get("shift", "OFF")
+
+    reasons = []
+
+    if pattern.normal_department == department:
+        reasons.append("Usually works this area")
+
+    if probability >= 75:
+        reasons.append(f"Usually works {key.title()}")
+    elif probability >= 50:
+        reasons.append(f"Often works {key.title()}")
+
+    if typical_signature == signature:
+        reasons.append("Usually works this shift time")
+
+    proposed_hours = signature_duration(signature)
+    remaining_hours = automatic_hour_ceiling(pattern) - current_hours
+    remaining_days = target_days(pattern) - current_days
+
+    if remaining_days == 1:
+        reasons.append("Would complete normal working days")
+    elif remaining_days > 1:
+        reasons.append(f"{remaining_days} normal days remaining")
+
+    if proposed_hours <= remaining_hours:
+        reasons.append(
+            f"Would be about {round(current_hours + proposed_hours, 1)} hrs"
+        )
+
+    if float(pattern.average_days_worked) < 1:
+        reasons.append("Rare worker — reserve option")
+
+    return reasons[:3]
+
+
+def rank_candidates(
+    patterns,
+    weekday,
+    department,
+    signature,
+    current_hours,
+    current_days,
+    assigned_days,
+    shift_date,
+):
+    ranked = []
+
+    for pattern in patterns:
+        if (pattern.employee_id, shift_date) in assigned_days:
+            continue
+
+        score = score_candidate(
+            pattern=pattern,
+            weekday=weekday,
+            department=department,
+            signature=signature,
+            current_hours=current_hours.get(pattern.employee_id, 0.0),
+            current_days=current_days.get(pattern.employee_id, 0),
+        )
+
+        if score <= -999:
+            continue
+
+        ranked.append(
+            {
+                "score": score,
+                "pattern": pattern,
+                "reasons": candidate_reasons(
+                    pattern=pattern,
+                    weekday=weekday,
+                    department=department,
+                    signature=signature,
+                    current_hours=current_hours.get(pattern.employee_id, 0.0),
+                    current_days=current_days.get(pattern.employee_id, 0),
+                ),
+            }
+        )
+
+    ranked.sort(key=lambda item: item["score"], reverse=True)
+    return ranked
+
+
 @transaction.atomic
 def generate_business_roster(target: RosterWeek, uncertain_threshold=75):
     target.purpose = RosterPurpose.WEEKLY

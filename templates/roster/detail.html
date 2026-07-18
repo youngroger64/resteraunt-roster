@@ -15,6 +15,23 @@
       <a class="btn" href="?show=all">Show all employees</a>
     {% endif %}
     <button class="btn" onclick="window.print()">Print</button>
+
+    {% if roster.status == "draft" and roster.purpose == "weekly" %}
+      <form method="post"
+            action="{% url 'roster:regenerate' roster.pk %}"
+            onsubmit="return confirm('Replace every shift in this draft?')">
+        {% csrf_token %}
+        <button class="btn">Regenerate</button>
+      </form>
+    {% endif %}
+
+    {% if roster.status != "published" %}
+      <a class="btn danger"
+         href="{% url 'roster:delete' roster.pk %}">
+        Delete
+      </a>
+    {% endif %}
+
     {% if roster.status == "draft" and roster.purpose == "weekly" %}
       <form method="post" action="{% url 'roster:publish' roster.pk %}">
         {% csrf_token %}
@@ -31,29 +48,80 @@
 </div>
 {% endif %}
 
+
 {% if open_shifts %}
 <section class="card open-shifts-card print-hide">
-  <h2>Needs a choice</h2><p class="muted">These were left open because the next automatic choice would exceed someone's normal days or hours.</p>
-  {% for open_shift in open_shifts %}
-  <div class="open-shift-row">
-    <div>
-      <strong>
-        {{ open_shift.date|date:"D d M" }} ·
-        {{ open_shift.get_department_display }}
-      </strong>
-      <span>{{ open_shift.source_signature }}</span>
+  <h2>Needs a choice</h2>
+  <p class="muted">
+    Best matches are shown first. Use Other employees only when needed.
+  </p>
+
+  {% for item in open_shifts %}
+  <article class="open-choice">
+    <header class="open-choice-header">
+      <div>
+        <strong>
+          {{ item.shift.date|date:"D d M" }} ·
+          {{ item.shift.get_department_display }}
+        </strong>
+        <span>{{ item.shift.source_signature }}</span>
+      </div>
+    </header>
+
+    {% if item.suggestion.choices %}
+    <div class="ranked-candidates">
+      {% for choice in item.suggestion.choices %}
+      <div class="candidate-card">
+        <div class="candidate-rank">{{ forloop.counter }}</div>
+        <div class="candidate-copy">
+          <strong>{{ choice.name }}</strong>
+          <small>
+            {{ choice.current_days }}/{{ choice.target_days }} days ·
+            {{ choice.current_hours }}/{{ choice.target_hours }} hrs
+          </small>
+          {% if choice.reasons %}
+          <ul class="candidate-reasons">
+            {% for reason in choice.reasons %}
+            <li>{{ reason }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </div>
+        <form method="post"
+              action="{% url 'roster:assign_suggested_employee' roster.pk item.shift.pk choice.employee_id %}">
+          {% csrf_token %}
+          <button class="btn {% if forloop.first %}primary{% endif %}">
+            Use
+          </button>
+        </form>
+      </div>
+      {% endfor %}
     </div>
-    <form method="post"
-          action="{% url 'roster:assign_open_shift' roster.pk open_shift.pk %}">
-      {% csrf_token %}
-      <select name="employee_id" required>
-        <option value="">Choose employee</option>
-        {% for row in rows %}
-          {% if open_shift.department == "restaurant" and row.employee.can_work_restaurant or open_shift.department == "bar" and row.employee.can_work_bar %}
+    {% endif %}
+
+    <details class="other-employees">
+      <summary>Other employees</summary>
+      <form method="post"
+            action="{% url 'roster:assign_open_shift' roster.pk item.shift.pk %}">
+        {% csrf_token %}
+        <select name="employee_id" required>
+          <option value="">Choose employee</option>
+          {% for row in rows %}
+            {% if item.shift.department == "restaurant" and row.employee.can_work_restaurant or item.shift.department == "bar" and row.employee.can_work_bar %}
             <option value="{{ row.employee.pk }}">
               {{ row.employee.full_name }}
             </option>
-          {% endif %}
+            {% endif %}
+          {% endfor %}
+        </select>
+        <button class="btn">Assign</button>
+      </form>
+    </details>
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
+
         {% endfor %}
       </select>
       <button class="btn primary">Assign</button>

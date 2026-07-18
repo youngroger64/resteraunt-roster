@@ -1,10 +1,70 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-header"><div><h1>Generate roster</h1><p class="muted">Create the first draft from the learned patterns.</p></div></div>
-{% if existing_roster %}
-<div class="alert warning">That week already exists.
-<div class="actions"><a class="btn primary" href="{% url 'roster:detail' existing_roster.pk %}">Open it</a><a class="btn" href="{% url 'roster:generate_patterns' %}">Choose another week</a></div>
+<div class="page-header">
+  <div>
+    <h1>Generate roster</h1>
+    <p class="muted">
+      Generate a new draft, or replace an existing draft for the same week.
+    </p>
+  </div>
 </div>
+
+{% if existing_roster %}
+<div class="card form-card existing-roster-choice">
+  <h2>{{ existing_roster }} already exists</h2>
+
+  {% if published_existing or existing_roster.status == "published" %}
+    <p>This roster is published and will not be overwritten.</p>
+    <div class="actions">
+      <a class="btn primary"
+         href="{% url 'roster:detail' existing_roster.pk %}">
+        Open published roster
+      </a>
+      <a class="btn"
+         href="{% url 'roster:generate_patterns' %}">
+        Choose another week
+      </a>
+    </div>
+  {% else %}
+    <p>Choose what happens:</p>
+
+    <div class="choice-grid">
+      <a class="choice-card"
+         href="{% url 'roster:detail' existing_roster.pk %}">
+        <strong>Open existing draft</strong>
+        <span>Keep its current shifts and choices.</span>
+      </a>
+
+      <form method="post" class="choice-card danger-lite"
+            onsubmit="return confirm('Replace every shift in this draft?')">
+        {% csrf_token %}
+        <input type="hidden"
+               name="week_start"
+               value="{{ form.week_start.value|date:'Y-m-d' }}">
+        <input type="hidden"
+               name="uncertain_choice"
+               value="{{ form.uncertain_choice.value }}">
+        <input type="hidden"
+               name="replace_existing"
+               value="yes">
+        <strong>Replace and regenerate</strong>
+        <span>Delete this draft's shifts and generate it again.</span>
+        <button class="btn primary">Replace draft</button>
+      </form>
+
+      <a class="choice-card"
+         href="{% url 'roster:generate_patterns' %}">
+        <strong>Choose another week</strong>
+        <span>Leave this draft unchanged.</span>
+      </a>
+    </div>
+  {% endif %}
+</div>
+{% else %}
+<form method="post" class="card form-card">
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button class="btn primary">Generate draft</button>
+</form>
 {% endif %}
-<form method="post" class="card form-card">{% csrf_token %}{{ form.as_p }}<button class="btn primary">Generate draft</button></form>
 {% endblock %}
