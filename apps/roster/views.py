@@ -1,55 +1,89 @@
 from datetime import timedelta
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.db.models import Sum
 from django.http import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from apps.employees.models import Department, Employee
-from .forms import RosterWeekForm
-from .models import RosterStatus, RosterWeek, Shift
-from .services.generator import copy_roster
+from .forms import GeneratePatternRosterForm, RosterWeekForm
+from .models import EmployeePattern, RosterPurpose, RosterStatus, RosterWeek, Shift
+from .services.generator import copy_roster, generate_from_patterns, parse_signature
+from .services.learner import learn_patterns
 from .services.publisher import publish_roster
 
 @login_required
 def roster_list(request):
-    return render(request, "roster/list.html", {"rosters": RosterWeek.objects.all()})
+    return render(request, "roster/list.html", {"rosters":RosterWeek.objects.all()})
 
 @login_required
 def roster_create(request):
     form = RosterWeekForm(request.POST or None)
-    latest = RosterWeek.objects.first()
+    latest = RosterWeek.objects.filter(purpose=RosterPurpose.WEEKLY).first()
     if request.method == "POST" and form.is_valid():
-        roster = form.save()
-        if request.POST.get("copy_latest") and latest and latest.pk != roster.pk:
-            count = copy_roster(latest, roster)
-            messages.success(request, f"Draft created with {count} copied shifts.")
-        else:
-            messages.success(request, "Blank draft created.")
+        roster = form.save(commit=False)
+        roster.purpose = RosterPurpose.WEEKLY
+        roster.save()
+        if request.POST.get("copy_latest") and latest:
+            copy_roster(latest, roster)
         return redirect("roster:detail", pk=roster.pk)
-    return render(request, "roster/create.html", {"form": form, "latest": latest})
+    return render(request, "roster/create.html", {"form":form,"latest":latest})
+
+@login_required
+def learn(request):
+    historic_count = RosterWeek.objects.filter(purpose=RosterPurpose.HISTORIC).count()
+    if request.method == "POST":
+        patterns = learn_patterns()
+        messages.success(request, f"Learned patterns for {len(patterns)} employees.")
+        return redirect("roster:patterns")
+    return render(request, "roster/learn.html", {"historic_count":historic_count})
+
+@login_required
+def pattern_list(request):
+    return render(request, "roster/patterns.html", {
+        "patterns":EmployeePattern.objects.select_related("employee")
+    })
+
+@login_required
+def generate_pattern_roster(request):
+    form = GeneratePatternRosterForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        roster, created_new = RosterWeek.objects.get_or_create(
+            week_start=form.cleaned_data["week_start"],
+            defaults={"purpose":RosterPurpose.WEEKLY},
+        )
+        if not created_new and roster.shifts.exists():
+            return render(request, "roster/generate_patterns.html", {
+                "form":form,"existing_roster":roster
+            })
+        minimum = 0 if form.cleaned_data["uncertain_choice"] == "best" else 50
+        created, unresolved = generate_from_patterns(roster, minimum)
+        request.session[f"unresolved_{roster.pk}"] = unresolved
+        messages.success(request, f"Generated {created} shifts. {len(unresolved)} cells need a choice.")
+        return redirect("roster:detail", pk=roster.pk)
+    return render(request, "roster/generate_patterns.html", {"form":form})
 
 @login_required
 def roster_detail(request, pk):
     roster = get_object_or_404(RosterWeek, pk=pk)
-    employees = Employee.objects.filter(is_active=True)
     days = [roster.week_start + timedelta(days=i) for i in range(7)]
-    shifts = roster.shifts.select_related("employee").all()
-    shift_map = {}
-    employee_hours = {}
-    for shift in shifts:
+    shift_map, hours = {}, {}
+    for shift in roster.shifts.select_related("employee"):
         shift_map.setdefault((shift.employee_id, shift.date), []).append(shift)
-        employee_hours[shift.employee_id] = employee_hours.get(shift.employee_id, 0) + shift.duration_hours
-
+        hours[shift.employee_id] = hours.get(shift.employee_id, 0) + shift.duration_hours
+    unresolved = request.session.get(f"unresolved_{roster.pk}", [])
+    unresolved_map = {(int(i["employee_id"]), i["date"]): i for i in unresolved}
     rows = []
-    for employee in employees:
+    for employee in Employee.objects.filter(is_active=True):
         cells = []
         for day in days:
-            cells.append({"day": day, "shifts": shift_map.get((employee.id, day), [])})
-        rows.append({"employee": employee, "cells": cells, "hours": round(employee_hours.get(employee.id, 0), 2)})
-
+            cells.append({
+                "day":day,
+                "shifts":shift_map.get((employee.id, day), []),
+                "issue":unresolved_map.get((employee.id, day.isoformat())),
+            })
+        rows.append({"employee":employee,"cells":cells,"hours":round(hours.get(employee.id,0),2)})
     return render(request, "roster/detail.html", {
-        "roster": roster, "days": days, "rows": rows,
-        "departments": Department.choices,
+        "roster":roster,"days":days,"rows":rows,
+        "departments":Department.choices,"unresolved_count":len(unresolved),
     })
 
 @login_required
@@ -57,65 +91,50 @@ def save_cell(request, pk):
     if request.method != "POST":
         return HttpResponseBadRequest("POST required")
     roster = get_object_or_404(RosterWeek, pk=pk)
-    if roster.status != RosterStatus.DRAFT:
-        messages.error(request, "Published rosters cannot be edited.")
-        return redirect("roster:detail", pk=pk)
-
-    employee = get_object_or_404(Employee, pk=request.POST.get("employee_id"))
-    date = request.POST.get("date")
-    department = request.POST.get("department") or employee.department
-    shift_text = request.POST.get("shift_text", "").strip()
-
+    employee = get_object_or_404(Employee, pk=request.POST["employee_id"])
+    date = request.POST["date"]
+    text = request.POST.get("shift_text","").strip()
     Shift.objects.filter(roster_week=roster, employee=employee, date=date).delete()
-    if shift_text and shift_text.lower() not in {"off", "-", "none"}:
-        parts = [x.strip() for x in shift_text.replace("&", ",").split(",") if x.strip()]
-        segment = 1
-        for part in parts:
-            separator = "-" if "-" in part else "–" if "–" in part else None
-            if not separator:
-                continue
-            start, end = [x.strip() for x in part.split(separator, 1)]
-            def normalise(value):
-                value = value.lower().replace(".", ":").replace(" ", "")
-                for suffix in ("am", "pm"):
-                    if value.endswith(suffix):
-                        value = value[:-2]
-                if ":" not in value:
-                    value += ":00"
-                h, m = value.split(":", 1)
-                h = int(h)
-                m = int(m)
-                return f"{h:02d}:{m:02d}"
-            try:
+    if text and text.lower() not in {"off","-","none"}:
+        try:
+            for segment, start, end in parse_signature(text):
                 Shift.objects.create(
-                    roster_week=roster,
-                    employee=employee,
-                    department=department,
-                    date=date,
-                    start_time=normalise(start),
-                    end_time=normalise(end),
-                    segment=segment,
-                    source="manual",
-                    confidence=100,
+                    roster_week=roster, employee=employee,
+                    department=request.POST.get("department") or employee.department,
+                    date=date, start_time=start, end_time=end, segment=segment,
+                    source="manual", confidence=100,
                 )
-                segment += 1
-            except (ValueError, TypeError):
-                messages.error(request, f"Could not understand '{part}'. Use 09:00-17:00.")
-                return redirect("roster:detail", pk=pk)
+        except Exception:
+            messages.error(request, "Choose: enter 09:00-17:00, enter a split shift, or type OFF.")
+            return redirect("roster:detail", pk=pk)
+    key = f"unresolved_{roster.pk}"
+    request.session[key] = [
+        i for i in request.session.get(key, [])
+        if not (int(i["employee_id"]) == employee.id and i["date"] == date)
+    ]
+    return redirect("roster:detail", pk=pk)
 
-    messages.success(request, f"{employee.full_name}'s shift updated.")
+@login_required
+def use_suggestion(request, pk):
+    roster = get_object_or_404(RosterWeek, pk=pk)
+    employee = get_object_or_404(Employee, pk=request.POST["employee_id"])
+    date = request.POST["date"]
+    suggestion = request.POST.get("suggestion","OFF")
+    for segment, start, end in parse_signature(suggestion):
+        Shift.objects.create(
+            roster_week=roster, employee=employee, department=employee.department,
+            date=date, start_time=start, end_time=end, segment=segment,
+            source="learned", confidence=int(request.POST.get("confidence",0)),
+        )
+    key = f"unresolved_{roster.pk}"
+    request.session[key] = [
+        i for i in request.session.get(key, [])
+        if not (int(i["employee_id"]) == employee.id and i["date"] == date)
+    ]
     return redirect("roster:detail", pk=pk)
 
 @login_required
 def roster_publish(request, pk):
-    if request.method != "POST":
-        return HttpResponseBadRequest("POST required")
     roster = get_object_or_404(RosterWeek, pk=pk)
     publish_roster(roster, request.user)
-    messages.success(request, "Roster published.")
     return redirect("roster:detail", pk=pk)
-
-@login_required
-def roster_print(request, pk):
-    roster = get_object_or_404(RosterWeek, pk=pk)
-    return roster_detail(request, pk)

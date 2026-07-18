@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header"><div><h1>Generate roster</h1><p class="muted">Create the first draft from the learned patterns.</p></div></div>
+{% if existing_roster %}
+<div class="alert warning">That week already exists.
+<div class="actions"><a class="btn primary" href="{% url 'roster:detail' existing_roster.pk %}">Open it</a><a class="btn" href="{% url 'roster:generate_patterns' %}">Choose another week</a></div>
+</div>
+{% endif %}
+<form method="post" class="card form-card">{% csrf_token %}{{ form.as_p }}<button class="btn primary">Generate draft</button></form>
+{% endblock %}

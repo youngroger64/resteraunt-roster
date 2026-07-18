@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+<div><h1>Learned patterns</h1><p class="muted">Evidence, not fixed rules.</p></div>
+<div class="actions"><a class="btn" href="{% url 'roster:learn' %}">Relearn</a><a class="btn primary" href="{% url 'roster:generate_patterns' %}">Generate draft</a></div>
+</div>
+<div class="card table-wrap"><table>
+<thead><tr><th>Employee</th><th>Weeks</th><th>Area</th><th>Hours</th><th>Days</th><th>Consistency</th><th>Work-day likelihood</th></tr></thead>
+<tbody>
+{% for p in patterns %}
+<tr>
+<td><strong>{{ p.employee.full_name }}</strong></td><td>{{ p.weeks_seen }}</td><td>{{ p.get_normal_department_display|default:"—" }}</td>
+<td>{{ p.average_weekly_hours }}</td><td>{{ p.average_days_worked }}</td><td>{{ p.consistency }}%</td>
+<td>M {{ p.day_probabilities.mon }}% · T {{ p.day_probabilities.tue }}% · W {{ p.day_probabilities.wed }}% · T {{ p.day_probabilities.thu }}% · F {{ p.day_probabilities.fri }}% · S {{ p.day_probabilities.sat }}% · S {{ p.day_probabilities.sun }}%</td>
+</tr>
+{% empty %}<tr><td colspan="7">No patterns yet.</td></tr>{% endfor %}
+</tbody></table></div>
+{% endblock %}

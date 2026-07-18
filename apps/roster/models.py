@@ -10,9 +10,15 @@ class RosterStatus(models.TextChoices):
     PUBLISHED = "published", "Published"
     SUPERSEDED = "superseded", "Superseded"
 
+class RosterPurpose(models.TextChoices):
+    BASE = "base", "Base roster"
+    HISTORIC = "historic", "Historic roster"
+    WEEKLY = "weekly", "Weekly roster"
+
 class RosterWeek(TimeStampedModel):
     week_start = models.DateField(unique=True)
     status = models.CharField(max_length=20, choices=RosterStatus.choices, default=RosterStatus.DRAFT)
+    purpose = models.CharField(max_length=20, choices=RosterPurpose.choices, default=RosterPurpose.WEEKLY)
     version = models.PositiveIntegerField(default=1)
     notes = models.TextField(blank=True)
     published_at = models.DateTimeField(null=True, blank=True)
@@ -53,9 +59,7 @@ class Shift(TimeStampedModel):
         ]
 
     def clean(self):
-        if not self.roster_week_id:
-            return
-        if not (self.roster_week.week_start <= self.date <= self.roster_week.week_end):
+        if self.roster_week_id and not (self.roster_week.week_start <= self.date <= self.roster_week.week_end):
             raise ValidationError("Shift date must fall inside the selected roster week.")
 
     @property
@@ -72,3 +76,19 @@ class Shift(TimeStampedModel):
 
     def __str__(self):
         return f"{self.employee} — {self.date} {self.display_time}"
+
+class EmployeePattern(TimeStampedModel):
+    employee = models.OneToOneField(Employee, on_delete=models.CASCADE, related_name="learned_pattern")
+    weeks_seen = models.PositiveSmallIntegerField(default=0)
+    normal_department = models.CharField(max_length=20, choices=Department.choices, blank=True)
+    average_weekly_hours = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    average_days_worked = models.DecimalField(max_digits=4, decimal_places=2, default=0)
+    consistency = models.PositiveSmallIntegerField(default=0)
+    day_probabilities = models.JSONField(default=dict, blank=True)
+    typical_shifts = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["employee__first_name", "employee__last_name"]
+
+    def __str__(self):
+        return f"Pattern for {self.employee}"
