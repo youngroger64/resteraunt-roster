@@ -1,29 +1,43 @@
-# Changelog
-
-## 0.7.0
-- Hard cap on automatically generated working days
-- Hard cap on automatically generated weekly hours
-- 4.5 learned days becomes a five-day automatic target
-- Small hours tolerance instead of allowing another full shift
-- Rare workers remain reserve choices
-- Over-limit shifts stay under Needs a choice
-- Corrected malformed evening and overnight times
-- Added generator tests for days and hours limits
-
-## 0.6.0
-- Compact roster, scheduled employees only, Restaurant before Bar
-
-## 0.5.0
-- Business staffing demand and generated open shifts
-
-## 0.4.0
-- Real spreadsheet import and corrected learning calculations
-
-## 0.3.0
-- Safe employee deletion and duplicate merging
-
-## 0.2.0
-- Historic learning and draft generation
-
-## 0.1.0
-- Initial runnable project
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}Restaurant Roster{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="{% url 'dashboard:index' %}">
+      <span class="brand-mark">RR</span>
+      <span>Restaurant Roster</span>
+    </a>
+    <nav>
+      <a href="{% url 'dashboard:index' %}">Dashboard</a>
+      <a href="{% url 'roster:list' %}">Rosters</a>
+      <a href="{% url 'employees:list' %}">Employees</a>
+      <a href="{% url 'imports:index' %}">Imports</a>
+      <a href="{% url 'roster:patterns' %}">Learning</a>
+      <a href="/admin/">Admin</a>
+    </nav>
+    <div class="sidebar-footer">
+      {% if user.is_authenticated %}
+        <small>{{ user.username }}</small>
+        <form method="post" action="{% url 'logout' %}">{% csrf_token %}
+          <button class="link-button">Log out</button>
+        </form>
+      {% endif %}
+    </div>
+  </aside>
+  <main class="content">
+    {% if messages %}
+      {% for message in messages %}<div class="alert {{ message.tags }}">{{ message }}</div>{% endfor %}
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
+<script src="{% static 'js/app.js' %}"></script>
+</body>
+</html>
