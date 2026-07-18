@@ -1,12 +1,31 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-header">
-  <div><h1>What the app learned</h1><p class="muted">People patterns and normal staffing levels.</p></div>
-  <div class="actions"><a class="btn" href="{% url 'roster:learn' %}">Relearn</a><a class="btn primary" href="{% url 'roster:generate_patterns' %}">Generate roster</a></div>
+  <div>
+    <h1>What the app learned</h1>
+    <p class="muted">People patterns and normal weekly limits.</p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="{% url 'roster:learn' %}">Relearn</a>
+    <a class="btn primary"
+       href="{% url 'roster:generate_patterns' %}">
+      Generate roster
+    </a>
+  </div>
 </div>
+
 <div class="card table-wrap">
 <table>
-<thead><tr><th>Employee</th><th>Area</th><th>Hours</th><th>Days</th><th>Pattern</th><th>Usually works</th></tr></thead>
+<thead>
+<tr>
+  <th>Employee</th>
+  <th>Area</th>
+  <th>Normal hours</th>
+  <th>Normal days</th>
+  <th>Pattern</th>
+  <th>Usually works</th>
+</tr>
+</thead>
 <tbody>
 {% for p in patterns %}
 <tr>
@@ -14,7 +33,17 @@
   <td>{{ p.get_normal_department_display|default:"—" }}</td>
   <td>{{ p.average_weekly_hours }}</td>
   <td>{{ p.average_days_worked }}</td>
-  <td>{% if p.average_days_worked < 1 %}Rarely works{% elif p.consistency >= 60 %}Predictable{% elif p.consistency >= 40 %}Varies a little{% else %}Varies weekly{% endif %}</td>
+  <td>
+    {% if p.average_days_worked < 1 %}
+      Rarely works
+    {% elif p.consistency >= 60 %}
+      Predictable
+    {% elif p.consistency >= 40 %}
+      Varies a little
+    {% else %}
+      Varies weekly
+    {% endif %}
+  </td>
   <td>
     {% if p.day_probabilities.mon >= 50 %}Mon {% endif %}
     {% if p.day_probabilities.tue >= 50 %}Tue {% endif %}
@@ -25,7 +54,9 @@
     {% if p.day_probabilities.sun >= 50 %}Sun{% endif %}
   </td>
 </tr>
-{% empty %}<tr><td colspan="6">No patterns yet.</td></tr>{% endfor %}
+{% empty %}
+<tr><td colspan="6">No patterns yet.</td></tr>
+{% endfor %}
 </tbody>
 </table>
 </div>

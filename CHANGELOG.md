@@ -1,15 +1,17 @@
 # Changelog
 
+## 0.7.0
+- Hard cap on automatically generated working days
+- Hard cap on automatically generated weekly hours
+- 4.5 learned days becomes a five-day automatic target
+- Small hours tolerance instead of allowing another full shift
+- Rare workers remain reserve choices
+- Over-limit shifts stay under Needs a choice
+- Corrected malformed evening and overnight times
+- Added generator tests for days and hours limits
+
 ## 0.6.0
-- Roster shows only scheduled employees by default
-- One-click Show all employees option
-- Restaurant appears before Bar
-- Tighter, more readable weekly grid
-- Landscape printing designed to fit all seven days
-- Removed repeated OFF rows from the normal and printed roster
-- Empty roster gives clear choices
-- Corrected evening shorthand such as 18:00-10:00 to 18:00-22:00
-- Included repairs for the v0.5 admin import, indentation and copy-roster issues
+- Compact roster, scheduled employees only, Restaurant before Bar
 
 ## 0.5.0
 - Business staffing demand and generated open shifts
