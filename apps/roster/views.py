@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from apps.employees.models import Department, Employee
 from .forms import GeneratePatternRosterForm, RosterWeekForm
 from .models import EmployeePattern, OpenShift, RosterPurpose, RosterStatus, RosterWeek, Shift, StaffingPattern
-from .services.generator import candidate_availability, copy_roster, generate_business_roster, parse_signature
+from .services.generator import candidate_availability, copy_roster, generate_business_roster, parse_signature, rank_candidates
 from .services.learner import learn_patterns
 from .services.publisher import publish_roster
 
@@ -81,7 +81,6 @@ def generate_pattern_roster(request):
             roster = existing
             roster.shifts.all().delete()
             roster.open_shifts.all().delete()
-            request.session.pop(f"open_suggestions_{roster.pk}", None)
             request.session.pop(f"unresolved_{roster.pk}", None)
         else:
             roster = RosterWeek.objects.create(
@@ -99,9 +98,6 @@ def generate_pattern_roster(request):
             roster,
             uncertain_threshold=threshold,
         )
-        request.session[f"open_suggestions_{roster.pk}"] = result[
-            "suggestions"
-        ]
 
         if existing:
             messages.success(
@@ -156,51 +152,69 @@ def roster_detail(request, pk):
         )
     ).order_by("area_order", "first_name", "last_name")
 
-    open_suggestions = request.session.get(
-        f"open_suggestions_{roster.pk}",
-        [],
+    patterns = list(
+        EmployeePattern.objects.select_related("employee")
     )
-    
-    suggestion_map = {
-        item.get("open_shift_id"): item
-        for item in open_suggestions
-    }
-    
+
+    current_hours = {}
+    current_days = {}
+    employee_days = set()
+    for shift in shifts:
+        current_hours[shift.employee_id] = (
+            current_hours.get(shift.employee_id, 0.0)
+            + shift.duration_hours
+        )
+        employee_days.add((shift.employee_id, shift.date))
+
+    for employee_id, shift_date in employee_days:
+        current_days[employee_id] = current_days.get(employee_id, 0) + 1
+
     open_choice_groups = {
         Department.RESTAURANT: [],
         Department.BAR: [],
     }
-    
-    all_active_employees = list(
-        Employee.objects.filter(is_active=True).order_by(
-            "first_name",
-            "last_name",
-        )
-    )
-    
+
     for open_shift in roster.open_shifts.all():
-        suggestion = suggestion_map.get(open_shift.pk, {})
-        available_ids = set(
-            suggestion.get("available_employee_ids", [])
+        ranked = rank_candidates(
+            roster=roster,
+            patterns=patterns,
+            weekday=open_shift.date.weekday(),
+            department=open_shift.department,
+            signature=(
+                open_shift.source_signature
+                or open_shift.display_time.replace("–", "-")
+            ),
+            current_hours=current_hours,
+            current_days=current_days,
+            shift_date=open_shift.date,
         )
-    
-        other_available = [
-            employee
-            for employee in all_active_employees
-            if employee.pk in available_ids
+
+        top_choices = [
+            {
+                "employee_id": item["pattern"].employee_id,
+                "name": item["pattern"].employee.full_name,
+                "reasons": item["reasons"],
+                "possible_split": item["possible_split"],
+            }
+            for item in ranked[:5]
         ]
-    
+
+        other_available = [
+            item["pattern"].employee
+            for item in ranked[5:]
+        ]
+
         open_choice_groups.setdefault(
             open_shift.department,
             [],
         ).append(
             {
                 "shift": open_shift,
-                "suggestion": suggestion,
+                "choices": top_choices,
                 "other_available": other_available,
             }
         )
-    
+
     open_shift_groups = [
         {
             "department": Department.RESTAURANT,
@@ -256,7 +270,6 @@ def roster_detail(request, pk):
             "departments": Department.choices,
             "unresolved_count": len(unresolved),
             "open_shift_groups": open_shift_groups,
-            "open_suggestions": open_suggestions,
             "show_all": show_all,
             "scheduled_employee_count": len(scheduled_employee_ids),
         },
@@ -494,16 +507,12 @@ def roster_regenerate(request, pk):
 
     roster.shifts.all().delete()
     roster.open_shifts.all().delete()
-    request.session.pop(f"open_suggestions_{roster.pk}", None)
     request.session.pop(f"unresolved_{roster.pk}", None)
 
     result = generate_business_roster(
         roster,
         uncertain_threshold=75,
     )
-    request.session[f"open_suggestions_{roster.pk}"] = result[
-        "suggestions"
-    ]
 
     messages.success(
         request,

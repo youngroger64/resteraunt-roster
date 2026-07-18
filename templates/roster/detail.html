@@ -53,73 +53,28 @@
 {% if open_shift_groups %}
 <section class="card open-shifts-card print-hide">
   <h2>Needs a choice</h2>
-  <p class="muted">
-    Only available employees are shown. Restaurant is listed first.
-  </p>
-
+  <p class="muted">Suggestions are recalculated from the current roster whenever this page opens.</p>
   {% for group in open_shift_groups %}
     {% if group.items %}
     <div class="choice-department">
       <h3>{{ group.label }}</h3>
-
       {% for item in group.items %}
       <article class="open-choice">
-        <header class="open-choice-header">
-          <div>
-            <strong>{{ item.shift.date|date:"D d M" }}</strong>
-            <span>{{ item.shift.source_signature }}</span>
-          </div>
-        </header>
-
-        {% if item.suggestion.choices %}
+        <header class="open-choice-header"><div><strong>{{ item.shift.date|date:"D d M" }}</strong><span>{{ item.shift.source_signature }}</span></div></header>
+        {% if item.choices %}
         <div class="ranked-candidates">
-          {% for choice in item.suggestion.choices %}
+          {% for choice in item.choices %}
           <div class="candidate-card">
             <div class="candidate-rank">{{ forloop.counter }}</div>
-            <div class="candidate-copy">
-              <strong>{{ choice.name }}</strong>
-              {% if choice.reasons %}
-              <ul class="candidate-reasons">
-                {% for reason in choice.reasons %}
-                <li>{{ reason }}</li>
-                {% endfor %}
-              </ul>
-              {% endif %}
-            </div>
-            <form method="post"
-                  action="{% url 'roster:assign_suggested_employee' roster.pk item.shift.pk choice.employee_id %}">
-              {% csrf_token %}
-              <button class="btn {% if forloop.first %}primary{% endif %}">
-                Use
-              </button>
-            </form>
+            <div class="candidate-copy"><strong>{{ choice.name }}</strong>{% if choice.reasons %}<ul class="candidate-reasons">{% for reason in choice.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}</div>
+            <form method="post" action="{% url 'roster:assign_suggested_employee' roster.pk item.shift.pk choice.employee_id %}">{% csrf_token %}<button class="btn {% if forloop.first %}primary{% endif %}">Use</button></form>
           </div>
           {% endfor %}
         </div>
-        {% else %}
-        <div class="alert warning">
-          No suitable employee was found automatically.
-        </div>
-        {% endif %}
-
+        {% else %}<div class="alert warning">No suitable employee is currently available.</div>{% endif %}
         {% if item.other_available %}
-        <details class="other-employees">
-          <summary>
-            Other available employees ({{ item.other_available|length }})
-          </summary>
-          <form method="post"
-                action="{% url 'roster:assign_open_shift' roster.pk item.shift.pk %}">
-            {% csrf_token %}
-            <select name="employee_id" required>
-              <option value="">Choose employee</option>
-              {% for employee in item.other_available %}
-              <option value="{{ employee.pk }}">
-                {{ employee.full_name }}
-              </option>
-              {% endfor %}
-            </select>
-            <button class="btn">Assign</button>
-          </form>
+        <details class="other-employees"><summary>Other available employees ({{ item.other_available|length }})</summary>
+          <form method="post" action="{% url 'roster:assign_open_shift' roster.pk item.shift.pk %}">{% csrf_token %}<select name="employee_id" required><option value="">Choose employee</option>{% for employee in item.other_available %}<option value="{{ employee.pk }}">{{ employee.full_name }}</option>{% endfor %}</select><button class="btn">Assign</button></form>
         </details>
         {% endif %}
       </article>
