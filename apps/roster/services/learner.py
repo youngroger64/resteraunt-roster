@@ -2,11 +2,17 @@ from collections import Counter, defaultdict
 from decimal import Decimal
 from django.db import transaction
 from apps.employees.models import Employee
-from apps.roster.models import EmployeePattern, RosterPurpose, RosterWeek, Shift
+from apps.roster.models import (
+    EmployeePattern,
+    RosterPurpose,
+    RosterWeek,
+    Shift,
+    StaffingPattern,
+)
 
-DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+DAY_KEYS = ["mon","tue","wed","thu","fri","sat","sun"]
 
-def _signature(shifts):
+def shift_signature(shifts):
     return ", ".join(
         f"{shift.start_time.strftime('%H:%M')}-{shift.end_time.strftime('%H:%M')}"
         for shift in sorted(shifts, key=lambda item: item.segment)
@@ -21,8 +27,12 @@ def learn_patterns():
         ).distinct().values_list("id", flat=True)
     )
     week_count = len(historic_weeks)
-    results = []
+    employee_results = []
 
+    EmployeePattern.objects.all().delete()
+    StaffingPattern.objects.all().delete()
+
+    # Employee patterns
     for employee in Employee.objects.filter(is_active=True):
         shifts = list(
             Shift.objects.filter(
@@ -53,11 +63,9 @@ def learn_patterns():
                 day_shifts = grouped.get((week_id, weekday), [])
                 if day_shifts:
                     worked_weeks += 1
-                    signatures[_signature(day_shifts)] += 1
+                    signatures[shift_signature(day_shifts)] += 1
 
-            probabilities[key] = round(
-                (worked_weeks / week_count) * 100
-            ) if week_count else 0
+            probabilities[key] = round((worked_weeks / week_count) * 100) if week_count else 0
 
             if signatures:
                 best, occurrences = signatures.most_common(1)[0]
@@ -71,30 +79,55 @@ def learn_patterns():
             sum(1 for weekday in range(7) if grouped.get((week_id, weekday)))
             for week_id in historic_weeks
         ]
-
         average_hours = (
             sum(weekly_hours.get(week_id, 0) for week_id in historic_weeks) / week_count
             if week_count else 0
         )
-        average_days = (
-            sum(days_per_week) / week_count if week_count else 0
-        )
+        average_days = sum(days_per_week) / week_count if week_count else 0
 
-        pattern, _ = EmployeePattern.objects.update_or_create(
+        pattern = EmployeePattern.objects.create(
             employee=employee,
-            defaults={
-                "weeks_seen": week_count,
-                "normal_department": departments.most_common(1)[0][0] if departments else "",
-                "average_weekly_hours": Decimal(str(round(average_hours, 2))),
-                "average_days_worked": Decimal(str(round(average_days, 2))),
-                "consistency": (
-                    round(sum(consistency_parts) / len(consistency_parts))
-                    if consistency_parts else 0
-                ),
-                "day_probabilities": probabilities,
-                "typical_shifts": typical,
-            },
+            weeks_seen=week_count,
+            normal_department=departments.most_common(1)[0][0] if departments else "",
+            average_weekly_hours=Decimal(str(round(average_hours, 2))),
+            average_days_worked=Decimal(str(round(average_days, 2))),
+            consistency=round(sum(consistency_parts) / len(consistency_parts)) if consistency_parts else 0,
+            day_probabilities=probabilities,
+            typical_shifts=typical,
         )
-        results.append(pattern)
+        employee_results.append(pattern)
 
-    return results
+    # Business staffing patterns
+    slot_counts = defaultdict(Counter)
+    for week_id in historic_weeks:
+        grouped = defaultdict(list)
+        for shift in Shift.objects.filter(roster_week_id=week_id):
+            grouped[(shift.date.weekday(), shift.department, shift.employee_id)].append(shift)
+
+        per_week_slots = Counter()
+        for (weekday, department, _employee_id), day_shifts in grouped.items():
+            signature = shift_signature(day_shifts)
+            per_week_slots[(weekday, department, signature)] += 1
+
+        for key, count in per_week_slots.items():
+            slot_counts[key][week_id] = count
+
+    for (weekday, department, signature), counts_by_week in slot_counts.items():
+        counts = [counts_by_week.get(week_id, 0) for week_id in historic_weeks]
+        average_required = sum(counts) / week_count if week_count else 0
+        weeks_present = sum(1 for count in counts if count > 0)
+        confidence = round((weeks_present / week_count) * 100) if week_count else 0
+        StaffingPattern.objects.create(
+            weekday=weekday,
+            department=department,
+            shift_signature=signature,
+            average_required=Decimal(str(round(average_required, 2))),
+            weeks_seen=week_count,
+            confidence=confidence,
+        )
+
+    return {
+        "employees": employee_results,
+        "staffing_patterns": StaffingPattern.objects.count(),
+        "historic_weeks": week_count,
+    }

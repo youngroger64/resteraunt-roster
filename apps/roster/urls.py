@@ -10,5 +10,6 @@ urlpatterns = [
     path("<int:pk>/", views.roster_detail, name="detail"),
     path("<int:pk>/cell/", views.save_cell, name="save_cell"),
     path("<int:pk>/use-suggestion/", views.use_suggestion, name="use_suggestion"),
+    path("<int:pk>/open/<int:open_shift_id>/assign/", views.assign_open_shift, name="assign_open_shift"),
     path("<int:pk>/publish/", views.roster_publish, name="publish"),
 ]

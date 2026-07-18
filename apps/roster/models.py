@@ -92,3 +92,47 @@ class EmployeePattern(TimeStampedModel):
 
     def __str__(self):
         return f"Pattern for {self.employee}"
+
+
+class StaffingPattern(TimeStampedModel):
+    weekday = models.PositiveSmallIntegerField()
+    department = models.CharField(max_length=20, choices=Department.choices)
+    shift_signature = models.CharField(max_length=120)
+    average_required = models.DecimalField(max_digits=4, decimal_places=2, default=0)
+    weeks_seen = models.PositiveSmallIntegerField(default=0)
+    confidence = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ["weekday", "department", "shift_signature"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["weekday", "department", "shift_signature"],
+                name="unique_staffing_pattern",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.get_department_display()} day {self.weekday}: {self.shift_signature}"
+
+
+class OpenShift(TimeStampedModel):
+    roster_week = models.ForeignKey(
+        RosterWeek, on_delete=models.CASCADE, related_name="open_shifts"
+    )
+    department = models.CharField(max_length=20, choices=Department.choices)
+    date = models.DateField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    source_signature = models.CharField(max_length=120, blank=True)
+    confidence = models.PositiveSmallIntegerField(default=0)
+    notes = models.CharField(max_length=250, blank=True)
+
+    class Meta:
+        ordering = ["date", "department", "start_time"]
+
+    @property
+    def display_time(self):
+        return f"{self.start_time.strftime('%H:%M')}–{self.end_time.strftime('%H:%M')}"
+
+    def __str__(self):
+        return f"Open {self.get_department_display()} shift {self.date} {self.display_time}"

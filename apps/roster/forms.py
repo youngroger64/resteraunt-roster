@@ -8,12 +8,15 @@ class RosterWeekForm(forms.ModelForm):
         widgets = {"week_start": forms.DateInput(attrs={"type":"date"})}
 
 class GeneratePatternRosterForm(forms.Form):
-    week_start = forms.DateField(label="Week begins", widget=forms.DateInput(attrs={"type":"date"}))
+    week_start = forms.DateField(
+        label="Week begins",
+        widget=forms.DateInput(attrs={"type":"date"}),
+    )
     uncertain_choice = forms.ChoiceField(
-        label="When the pattern is uncertain",
+        label="When the app is unsure",
         choices=[
-            ("blank","Leave it blank for the manager"),
-            ("best","Use the best suggestion"),
+            ("leave_open","Leave the shift open and show choices"),
+            ("best","Use the best available person"),
         ],
-        initial="blank",
+        initial="leave_open",
     )

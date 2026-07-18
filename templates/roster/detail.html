@@ -3,6 +3,33 @@
 <div class="page-header print-hide"><div><h1>{{ roster }}</h1><p class="muted">{{ roster.get_purpose_display }} · {{ roster.get_status_display }}</p></div>
 <div class="actions"><button class="btn" onclick="window.print()">Print</button>{% if roster.status == "draft" and roster.purpose == "weekly" %}<form method="post" action="{% url 'roster:publish' roster.pk %}">{% csrf_token %}<button class="btn primary">Publish</button></form>{% endif %}</div></div>
 {% if unresolved_count %}<div class="alert warning"><strong>{{ unresolved_count }} uncertain cells.</strong> Choose Use, enter another shift, or type OFF.</div>{% endif %}
+
+{% if open_shifts %}
+<section class="card open-shifts-card print-hide">
+  <h2>Needs a choice</h2>
+  {% for open_shift in open_shifts %}
+  <div class="open-shift-row">
+    <div>
+      <strong>{{ open_shift.date|date:"D d M" }} · {{ open_shift.get_department_display }}</strong>
+      <span>{{ open_shift.source_signature }}</span>
+    </div>
+    <form method="post" action="{% url 'roster:assign_open_shift' roster.pk open_shift.pk %}">
+      {% csrf_token %}
+      <select name="employee_id" required>
+        <option value="">Choose employee</option>
+        {% for row in rows %}
+          {% if open_shift.department == "restaurant" and row.employee.can_work_restaurant or open_shift.department == "bar" and row.employee.can_work_bar %}
+          <option value="{{ row.employee.pk }}">{{ row.employee.full_name }}</option>
+          {% endif %}
+        {% endfor %}
+      </select>
+      <button class="btn primary">Assign</button>
+    </form>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
 <div class="roster-grid-wrap"><table class="roster-grid"><thead><tr><th class="employee-col">Employee</th>{% for day in days %}<th>{{ day|date:"D" }}<small>{{ day|date:"d M" }}</small></th>{% endfor %}<th>Hours</th></tr></thead><tbody>
 {% regroup rows by employee.department as groups %}{% for group in groups %}<tr class="department-row"><td colspan="9">{{ group.grouper|title }}</td></tr>{% for row in group.list %}
 <tr><td class="employee-col"><strong>{{ row.employee.full_name }}</strong><small>{{ row.employee.get_department_display }}</small></td>

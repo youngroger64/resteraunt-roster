@@ -34,3 +34,11 @@ code{background:#eef2f7;padding:2px 5px;border-radius:5px}
 .merge-summary div{display:grid;gap:6px}
 .merge-summary small{color:var(--muted)}
 .field-block{display:grid;gap:8px;margin-bottom:22px}
+
+.open-shifts-card{margin-bottom:18px}
+.open-shift-row{display:grid;grid-template-columns:1fr minmax(320px,520px);gap:18px;align-items:center;padding:14px 0;border-bottom:1px solid var(--line)}
+.open-shift-row:last-child{border-bottom:0}
+.open-shift-row div{display:grid;gap:3px}
+.open-shift-row span{color:var(--muted)}
+.open-shift-row form{display:grid;grid-template-columns:1fr auto;gap:8px}
+@media(max-width:800px){.open-shift-row{grid-template-columns:1fr}.open-shift-row form{grid-template-columns:1fr}}

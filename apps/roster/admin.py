@@ -16,3 +16,15 @@ class ShiftAdmin(admin.ModelAdmin):
     list_display = ("employee", "date", "department", "start_time", "end_time", "confidence")
     list_filter = ("department", "date", "source")
     search_fields = ("employee__first_name", "employee__last_name")
+
+
+@admin.register(StaffingPattern)
+class StaffingPatternAdmin(admin.ModelAdmin):
+    list_display = ("weekday", "department", "shift_signature", "average_required", "confidence")
+    list_filter = ("weekday", "department")
+
+
+@admin.register(OpenShift)
+class OpenShiftAdmin(admin.ModelAdmin):
+    list_display = ("date", "department", "start_time", "end_time", "confidence")
+    list_filter = ("date", "department")

@@ -5,8 +5,8 @@ from django.http import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from apps.employees.models import Department, Employee
 from .forms import GeneratePatternRosterForm, RosterWeekForm
-from .models import EmployeePattern, RosterPurpose, RosterStatus, RosterWeek, Shift
-from .services.generator import copy_roster, generate_from_patterns, parse_signature
+from .models import EmployeePattern, OpenShift, RosterPurpose, RosterStatus, RosterWeek, Shift, StaffingPattern
+from .services.generator import copy_roster, generate_business_roster, parse_signature
 from .services.learner import learn_patterns
 from .services.publisher import publish_roster
 
@@ -31,8 +31,8 @@ def roster_create(request):
 def learn(request):
     historic_count = RosterWeek.objects.filter(purpose=RosterPurpose.HISTORIC).count()
     if request.method == "POST":
-        patterns = learn_patterns()
-        messages.success(request, f"Learned patterns for {len(patterns)} employees.")
+        result = learn_patterns()
+        messages.success(request, f"Learned {len(result['employees'])} employees and {result['staffing_patterns']} business staffing patterns.")
         return redirect("roster:patterns")
     return render(request, "roster/learn.html", {"historic_count":historic_count})
 
@@ -48,18 +48,26 @@ def generate_pattern_roster(request):
     if request.method == "POST" and form.is_valid():
         roster, created_new = RosterWeek.objects.get_or_create(
             week_start=form.cleaned_data["week_start"],
-            defaults={"purpose":RosterPurpose.WEEKLY},
+            defaults={"purpose": RosterPurpose.WEEKLY},
         )
-        if not created_new and roster.shifts.exists():
-            return render(request, "roster/generate_patterns.html", {
-                "form":form,"existing_roster":roster
-            })
-        minimum = 0 if form.cleaned_data["uncertain_choice"] == "best" else 50
-        created, unresolved = generate_from_patterns(roster, minimum)
-        request.session[f"unresolved_{roster.pk}"] = unresolved
-        messages.success(request, f"Generated {created} shifts. {len(unresolved)} cells need a choice.")
+        if not created_new and (roster.shifts.exists() or roster.open_shifts.exists()):
+            return render(
+                request,
+                "roster/generate_patterns.html",
+                {"form": form, "existing_roster": roster},
+            )
+
+        threshold = 0 if form.cleaned_data["uncertain_choice"] == "best" else 75
+        result = generate_business_roster(roster, uncertain_threshold=threshold)
+        request.session[f"open_suggestions_{roster.pk}"] = result["suggestions"]
+        messages.success(
+            request,
+            f"Generated {result['created']} assigned shift segments. "
+            f"{result['open']} shifts need a manager choice.",
+        )
         return redirect("roster:detail", pk=roster.pk)
-    return render(request, "roster/generate_patterns.html", {"form":form})
+
+    return render(request, "roster/generate_patterns.html", {"form": form})
 
 @login_required
 def roster_detail(request, pk):
@@ -69,6 +77,9 @@ def roster_detail(request, pk):
     for shift in roster.shifts.select_related("employee"):
         shift_map.setdefault((shift.employee_id, shift.date), []).append(shift)
         hours[shift.employee_id] = hours.get(shift.employee_id, 0) + shift.duration_hours
+
+open_shifts = list(roster.open_shifts.all())
+open_suggestions = request.session.get(f"open_suggestions_{roster.pk}", [])
     unresolved = request.session.get(f"unresolved_{roster.pk}", [])
     unresolved_map = {(int(i["employee_id"]), i["date"]): i for i in unresolved}
     rows = []
@@ -83,7 +94,7 @@ def roster_detail(request, pk):
         rows.append({"employee":employee,"cells":cells,"hours":round(hours.get(employee.id,0),2)})
     return render(request, "roster/detail.html", {
         "roster":roster,"days":days,"rows":rows,
-        "departments":Department.choices,"unresolved_count":len(unresolved),
+        "departments":Department.choices,"unresolved_count":len(unresolved),"open_shifts":open_shifts,"open_suggestions":open_suggestions,
     })
 
 @login_required
@@ -137,4 +148,30 @@ def use_suggestion(request, pk):
 def roster_publish(request, pk):
     roster = get_object_or_404(RosterWeek, pk=pk)
     publish_roster(roster, request.user)
+    return redirect("roster:detail", pk=pk)
+
+
+@login_required
+def assign_open_shift(request, pk, open_shift_id):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+    roster = get_object_or_404(RosterWeek, pk=pk)
+    open_shift = get_object_or_404(OpenShift, pk=open_shift_id, roster_week=roster)
+    employee = get_object_or_404(Employee, pk=request.POST["employee_id"])
+
+    parts = parse_signature(open_shift.source_signature or open_shift.display_time.replace("–", "-"))
+    for segment, start, end in parts:
+        Shift.objects.create(
+            roster_week=roster,
+            employee=employee,
+            department=open_shift.department,
+            date=open_shift.date,
+            start_time=start,
+            end_time=end,
+            segment=segment,
+            source="manager_choice",
+            confidence=100,
+        )
+    open_shift.delete()
+    messages.success(request, f"Assigned to {employee.full_name}.")
     return redirect("roster:detail", pk=pk)
