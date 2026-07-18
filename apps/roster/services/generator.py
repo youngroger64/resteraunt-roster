@@ -141,6 +141,38 @@ def signature_duration(signature):
     )
 
 
+
+def shift_band(signature):
+    parsed = parse_signature(signature)
+    if not parsed:
+        return "unknown"
+    hour = parsed[0][1].hour
+    if hour < 11:
+        return "morning"
+    if hour < 16:
+        return "day"
+    if hour < 20:
+        return "evening"
+    return "late"
+
+
+def employee_typical_band(pattern, weekday):
+    typical = pattern.typical_shifts.get(DAY_KEYS[weekday], {})
+    signature = typical.get("shift", "OFF")
+    return "unknown" if signature == "OFF" else shift_band(signature)
+
+
+def has_historic_split_pattern(pattern, weekday, proposed_signature):
+    typical = pattern.typical_shifts.get(DAY_KEYS[weekday], {})
+    signature = typical.get("shift", "OFF")
+    confidence = int(typical.get("confidence", 0))
+    return (
+        "," in signature
+        and signature == proposed_signature
+        and confidence >= 50
+    )
+
+
 def target_days(pattern):
     return min(7, max(0, math.ceil(float(pattern.average_days_worked))))
 
@@ -163,12 +195,11 @@ def score_candidate(
     signature,
     current_hours,
     current_days,
+    availability=None,
 ):
     employee = pattern.employee
-
     if not compatible(employee, department):
         return -999
-
     if current_days >= target_days(pattern):
         return -999
 
@@ -181,26 +212,41 @@ def score_candidate(
     typical = pattern.typical_shifts.get(key, {})
     typical_signature = typical.get("shift", "OFF")
     typical_confidence = int(typical.get("confidence", 0))
+    proposed_band = shift_band(signature)
+    typical_band = employee_typical_band(pattern, weekday)
+
+    incompatible = {
+        ("morning", "evening"),
+        ("morning", "late"),
+        ("evening", "morning"),
+        ("late", "morning"),
+    }
+    if (
+        typical_band != "unknown"
+        and (typical_band, proposed_band) in incompatible
+        and typical_confidence >= 50
+    ):
+        return -999
+
+    if availability and availability.get("possible_split"):
+        if not has_historic_split_pattern(pattern, weekday, signature):
+            return -999
 
     score = probability
-
-    if pattern.normal_department == department:
-        score += 25
+    score += 30 if pattern.normal_department == department else -20
 
     if typical_signature == signature:
-        score += 40
+        score += 50
     elif typical_signature != "OFF":
-        score += 10
+        score += 15 if typical_band == proposed_band else -25
 
     if target_days(pattern) - current_days == 1:
         score += 8
-
     if float(pattern.average_days_worked) < 1:
         score -= 35
 
     score += round(typical_confidence * 0.15)
     return score
-
 
 def candidate_reasons(
     pattern,
@@ -217,10 +263,8 @@ def candidate_reasons(
     typical_signature = typical.get("shift", "OFF")
 
     reasons = []
-
     if pattern.normal_department == department:
         reasons.append("Usually works this area")
-
     if probability >= 75:
         reasons.append(f"Usually works {key.title()}")
     elif probability >= 50:
@@ -228,17 +272,17 @@ def candidate_reasons(
 
     if typical_signature == signature:
         reasons.append("Usually works this shift time")
+    elif employee_typical_band(pattern, weekday) == shift_band(signature):
+        reasons.append("Usually works this time of day")
 
-    if availability["possible_split"]:
-        reasons.append("Possible split shift")
-    else:
+    if not availability["possible_split"]:
         reasons.append("Available for this shift")
+    elif has_historic_split_pattern(pattern, weekday, signature):
+        reasons.append("Historically works this split pattern")
 
     if float(pattern.average_days_worked) < 1:
         reasons.append("Rare worker — reserve option")
-
     return reasons[:3]
-
 
 def rank_candidates(
     roster,
@@ -270,6 +314,7 @@ def rank_candidates(
             signature=signature,
             current_hours=current_hours.get(pattern.employee_id, 0.0),
             current_days=current_days.get(pattern.employee_id, 0),
+            availability=availability,
         )
 
         if score <= -999:
