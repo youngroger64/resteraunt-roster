@@ -152,7 +152,10 @@
   <td class="hours target-hours">
   <strong>{{ row.hours }}</strong>
   {% if row.target_hours %}
-    <small>/ {{ row.target_hours }}</small>
+    <small>/ {{ row.target_hours }} area</small>
+  {% endif %}
+  {% if row.payroll_target_hours %}
+    <small class="payroll-total">Payroll avg {{ row.payroll_target_hours }}</small>
   {% endif %}
   {% if row.allocation_status %}
     <span class="allocation-status allocation-{{ row.allocation_status|slugify }}">

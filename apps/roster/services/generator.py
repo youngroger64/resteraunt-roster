@@ -178,24 +178,45 @@ def target_days(pattern):
     return min(7, max(0, math.ceil(float(pattern.average_days_worked))))
 
 
-def target_hours(pattern):
+def target_hours(pattern, department=None):
+    if department == Department.BAR:
+        return max(0.0, float(pattern.bar_target_hours))
+    if department == Department.RESTAURANT:
+        return max(0.0, float(pattern.restaurant_target_hours))
     return max(0.0, float(pattern.average_weekly_hours))
 
 
-def minimum_target_hours(pattern):
-    average = target_hours(pattern)
+def automatic_department_eligible(pattern, department):
+    employee = pattern.employee
+    if not compatible(employee, department):
+        return False
+
+    if department == Department.BAR:
+        return (
+            employee.department == Department.BAR
+            or float(pattern.bar_target_hours) > 0
+        )
+
+    return (
+        employee.department == Department.RESTAURANT
+        or float(pattern.restaurant_target_hours) > 0
+    )
+
+
+def minimum_target_hours(pattern, department=None):
+    average = target_hours(pattern, department)
     if average < 8:
         return 0.0
     return round(average * 0.80, 2)
 
 
-def hours_target_score(pattern, current_hours, proposed_hours):
-    average = target_hours(pattern)
+def hours_target_score(pattern, current_hours, proposed_hours, department=None):
+    average = target_hours(pattern, department)
     if average <= 0:
         return 0
 
     projected = current_hours + proposed_hours
-    if projected > automatic_hour_ceiling(pattern):
+    if projected > automatic_hour_ceiling(pattern, department):
         return -999
 
     completion = current_hours / average if average else 1
@@ -215,16 +236,16 @@ def hours_target_score(pattern, current_hours, proposed_hours):
     return -round((projected - average) * 6)
 
 
-def effective_priority_ratio(pattern, current_hours):
-    average = target_hours(pattern)
+def effective_priority_ratio(pattern, current_hours, department=None):
+    average = target_hours(pattern, department)
     if average < 8:
         return 9.0
     return current_hours / average
 
 
-def automatic_hour_ceiling(pattern):
+def automatic_hour_ceiling(pattern, department):
 
-    average = target_hours(pattern)
+    average = target_hours(pattern, department)
     if average < 10:
         return average + 2
     return average + 2.5
@@ -240,13 +261,13 @@ def score_candidate(
     availability=None,
 ):
     employee = pattern.employee
-    if not compatible(employee, department):
+    if not automatic_department_eligible(pattern, department):
         return -999
     if current_days >= target_days(pattern):
         return -999
 
     proposed_hours = signature_duration(signature)
-    if current_hours + proposed_hours > automatic_hour_ceiling(pattern):
+    if current_hours + proposed_hours > automatic_hour_ceiling(pattern, department):
         return -999
 
     key = DAY_KEYS[weekday]
@@ -286,6 +307,7 @@ def score_candidate(
         pattern,
         current_hours,
         proposed_hours,
+        department,
     )
     if hour_score <= -999:
         return -999
@@ -369,8 +391,8 @@ def rank_candidates(
             weekday=weekday,
             department=department,
             signature=signature,
-            current_hours=current_hours.get(pattern.employee_id, 0.0),
-            current_days=current_days.get(pattern.employee_id, 0),
+            current_hours=current_hours.get((pattern.employee_id, department), 0.0),
+            current_days=current_days.get((pattern.employee_id, department), 0),
             availability=availability,
         )
 
@@ -386,8 +408,8 @@ def rank_candidates(
                     weekday=weekday,
                     department=department,
                     signature=signature,
-                    current_hours=current_hours.get(pattern.employee_id, 0.0),
-                    current_days=current_days.get(pattern.employee_id, 0),
+                    current_hours=current_hours.get((pattern.employee_id, department), 0.0),
+                    current_days=current_days.get((pattern.employee_id, department), 0),
                     availability=availability,
                 ),
                 "possible_split": availability["possible_split"],
@@ -399,9 +421,10 @@ def rank_candidates(
             item["score"],
             -effective_priority_ratio(
                 item["pattern"],
-                current_hours.get(item["pattern"].employee_id, 0.0),
+                current_hours.get((item["pattern"].employee_id, department), 0.0),
+                department,
             ),
-            target_hours(item["pattern"]),
+            target_hours(item["pattern"], department),
         ),
         reverse=True,
     )
@@ -723,10 +746,14 @@ def generate_business_roster(target: RosterWeek, uncertain_threshold=75):
     )
 
     current_hours = {
-        pattern.employee_id: 0.0 for pattern in patterns
+        (pattern.employee_id, department): 0.0
+        for pattern in patterns
+        for department in (Department.RESTAURANT, Department.BAR)
     }
     current_days = {
-        pattern.employee_id: 0 for pattern in patterns
+        (pattern.employee_id, department): 0
+        for pattern in patterns
+        for department in (Department.RESTAURANT, Department.BAR)
     }
 
     created = 0
@@ -792,13 +819,9 @@ def generate_business_roster(target: RosterWeek, uncertain_threshold=75):
                     worked_hours += shift.duration_hours
                     created += 1
 
-                current_days[best_pattern.employee_id] = (
-                    current_days.get(best_pattern.employee_id, 0) + 1
-                )
-                current_hours[best_pattern.employee_id] = (
-                    current_hours.get(best_pattern.employee_id, 0.0)
-                    + worked_hours
-                )
+                allocation_key = (best_pattern.employee_id, staffing.department)
+                current_days[allocation_key] = current_days.get(allocation_key, 0) + 1
+                current_hours[allocation_key] = current_hours.get(allocation_key, 0.0) + worked_hours
                 add_planned_coverage(
                     staffing.weekday,
                     staffing.department,

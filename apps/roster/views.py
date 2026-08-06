@@ -164,14 +164,13 @@ def roster_detail(request, pk):
     current_days = {}
     employee_days = set()
     for shift in shifts:
-        current_hours[shift.employee_id] = (
-            current_hours.get(shift.employee_id, 0.0)
-            + shift.duration_hours
-        )
-        employee_days.add((shift.employee_id, shift.date))
+        key = (shift.employee_id, shift.department)
+        current_hours[key] = current_hours.get(key, 0.0) + shift.duration_hours
+        employee_days.add((shift.employee_id, shift.department, shift.date))
 
-    for employee_id, shift_date in employee_days:
-        current_days[employee_id] = current_days.get(employee_id, 0) + 1
+    for employee_id, department, shift_date in employee_days:
+        key = (employee_id, department)
+        current_days[key] = current_days.get(key, 0) + 1
 
     open_choice_groups = {
         Department.RESTAURANT: [],
@@ -262,11 +261,17 @@ def roster_detail(request, pk):
             employee_hours.get(employee.id, 0),
             2,
         )
-        learned_target = (
-            round(float(pattern.average_weekly_hours), 1)
-            if pattern else None
-        )
-        
+
+        if pattern:
+            if employee.department == Department.BAR:
+                learned_target = round(float(pattern.bar_target_hours), 1)
+            else:
+                learned_target = round(float(pattern.restaurant_target_hours), 1)
+            payroll_target = round(float(pattern.payroll_average_hours), 1)
+        else:
+            learned_target = None
+            payroll_target = None
+
         if learned_target is None or learned_target < 8:
             allocation_status = ""
         elif worked_hours < learned_target * 0.80:
@@ -275,13 +280,14 @@ def roster_detail(request, pk):
             allocation_status = "Over target"
         else:
             allocation_status = "On target"
-        
+
         rows.append(
             {
                 "employee": employee,
                 "cells": cells,
                 "hours": worked_hours,
                 "target_hours": learned_target,
+                "payroll_target_hours": payroll_target,
                 "allocation_status": allocation_status,
             }
         )

@@ -1,7 +1,7 @@
 from collections import Counter, defaultdict
 from decimal import Decimal
 from django.db import transaction
-from apps.employees.models import Employee
+from apps.employees.models import Department, Employee
 from apps.roster.models import (
     EmployeePattern,
     RosterPurpose,
@@ -69,11 +69,13 @@ def learn_patterns():
         grouped = defaultdict(list)
         departments = Counter()
         weekly_hours = Counter()
+        weekly_department_hours = defaultdict(Counter)
 
         for shift in shifts:
             grouped[(shift.roster_week_id, shift.date.weekday())].append(shift)
             departments[shift.department] += 1
             weekly_hours[shift.roster_week_id] += shift.duration_hours
+            weekly_department_hours[shift.department][shift.roster_week_id] += shift.duration_hours
 
         probabilities = {}
         typical = {}
@@ -107,14 +109,41 @@ def learn_patterns():
             .order_by("-payroll_week__week_end")
             .values_list("total_hours", flat=True)[:10]
         )
-        if payroll_hours:
-            # Payroll is the source of truth for target weekly hours.
-            average_hours = sum(float(value) for value in payroll_hours) / len(payroll_hours)
+        roster_average_hours = (
+            sum(weekly_hours.get(week_id, 0) for week_id in historic_weeks)
+            / week_count
+            if week_count else 0
+        )
+        payroll_average = (
+            sum(float(value) for value in payroll_hours) / len(payroll_hours)
+            if payroll_hours else 0
+        )
+
+        restaurant_target = (
+            sum(
+                weekly_department_hours[Department.RESTAURANT].get(week_id, 0)
+                for week_id in historic_weeks
+            ) / week_count
+            if week_count else 0
+        )
+        bar_target = (
+            sum(
+                weekly_department_hours[Department.BAR].get(week_id, 0)
+                for week_id in historic_weeks
+            ) / week_count
+            if week_count else 0
+        )
+
+        if payroll_average:
+            average_hours = payroll_average
+            tracked_total = restaurant_target + bar_target
+            if tracked_total > payroll_average and tracked_total > 0:
+                scale = payroll_average / tracked_total
+                restaurant_target *= scale
+                bar_target *= scale
         else:
-            average_hours = (
-                sum(weekly_hours.get(week_id, 0) for week_id in historic_weeks) / week_count
-                if week_count else 0
-            )
+            average_hours = roster_average_hours
+
         average_days = sum(days_per_week) / week_count if week_count else 0
 
         pattern = EmployeePattern.objects.create(
@@ -122,6 +151,9 @@ def learn_patterns():
             weeks_seen=week_count,
             normal_department=departments.most_common(1)[0][0] if departments else "",
             average_weekly_hours=Decimal(str(round(average_hours, 2))),
+            payroll_average_hours=Decimal(str(round(payroll_average, 2))),
+            restaurant_target_hours=Decimal(str(round(restaurant_target, 2))),
+            bar_target_hours=Decimal(str(round(bar_target, 2))),
             average_days_worked=Decimal(str(round(average_days, 2))),
             consistency=round(sum(consistency_parts) / len(consistency_parts)) if consistency_parts else 0,
             day_probabilities=probabilities,

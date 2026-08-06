@@ -209,3 +209,5 @@ code{background:#eef2f7;padding:2px 5px;border-radius:5px}
 .allocation-needs-hours{color:#b45309}
 .allocation-over-target{color:#b91c1c}
 .allocation-on-target{color:#15803d}
+
+.payroll-total{display:block;font-size:10px;color:var(--muted);white-space:nowrap}

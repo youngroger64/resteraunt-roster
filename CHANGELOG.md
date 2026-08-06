@@ -1,6 +1,17 @@
 # Changelog
 
 
+## 0.17.0
+- Automatic Bar assignments require Bar permission plus Bar history or a Bar home department
+- Automatic Restaurant assignments require Restaurant permission plus Restaurant history or home department
+- Payroll average is stored separately from roster-area targets
+- Restaurant and Bar receive separate learned target hours
+- Kitchen and other duties no longer inflate Restaurant targets
+- Roster displays area target and total payroll average separately
+- Added department-boundary tests
+
+
+
 ## 0.16.0
 - Payroll history import now accepts text-based PDF files
 - PDF, Word, Excel and CSV files can be batch-uploaded together
