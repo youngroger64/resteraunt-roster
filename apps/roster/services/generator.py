@@ -198,13 +198,28 @@ def hours_target_score(pattern, current_hours, proposed_hours):
     if projected > automatic_hour_ceiling(pattern):
         return -999
 
-    if current_hours < minimum_target_hours(pattern):
-        return min(60, round((average - current_hours) * 2))
+    completion = current_hours / average if average else 1
+    projected_completion = projected / average if average else 1
 
-    if projected <= average:
-        return min(30, round((average - current_hours) * 1.2))
+    # Regular/high-hour employees sit at the top of the food chain until
+    # they reach a reasonable share of their proven payroll average.
+    seniority = min(45, round(average * 1.25))
+    if completion < 0.50:
+        return 90 + seniority
+    if completion < 0.75:
+        return 60 + seniority
+    if completion < 0.90:
+        return 30 + round(seniority / 2)
+    if projected_completion <= 1.0:
+        return 10
+    return -round((projected - average) * 6)
 
-    return -round((projected - average) * 4)
+
+def effective_priority_ratio(pattern, current_hours):
+    average = target_hours(pattern)
+    if average < 8:
+        return 9.0
+    return current_hours / average
 
 
 def automatic_hour_ceiling(pattern):
@@ -379,7 +394,17 @@ def rank_candidates(
             }
         )
 
-    ranked.sort(key=lambda item: item["score"], reverse=True)
+    ranked.sort(
+        key=lambda item: (
+            item["score"],
+            -effective_priority_ratio(
+                item["pattern"],
+                current_hours.get(item["pattern"].employee_id, 0.0),
+            ),
+            target_hours(item["pattern"]),
+        ),
+        reverse=True,
+    )
     return ranked
 
 
@@ -521,11 +546,11 @@ def rebalance_generated_shifts(roster, patterns):
         ]
         under_patterns.sort(
             key=lambda pattern: (
-                current_hours.get(
-                    pattern.employee_id,
-                    0.0,
-                )
-                - target_hours(pattern)
+                effective_priority_ratio(
+                    pattern,
+                    current_hours.get(pattern.employee_id, 0.0),
+                ),
+                -target_hours(pattern),
             )
         )
 

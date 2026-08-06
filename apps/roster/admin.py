@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import CoveragePattern, OpenShift, RosterWeek, Shift, StaffingPattern
+from .models import CoveragePattern, OpenShift, PayrollRecord, PayrollWeek, RosterWeek, Shift, StaffingPattern
 
 class ShiftInline(admin.TabularInline):
     model = Shift
@@ -34,3 +34,14 @@ class OpenShiftAdmin(admin.ModelAdmin):
 class CoveragePatternAdmin(admin.ModelAdmin):
     list_display = ("weekday", "department", "slot_label", "average_required", "confidence")
     list_filter = ("weekday", "department")
+
+
+@admin.register(PayrollWeek)
+class PayrollWeekAdmin(admin.ModelAdmin):
+    list_display = ("week_end", "source_name")
+
+@admin.register(PayrollRecord)
+class PayrollRecordAdmin(admin.ModelAdmin):
+    list_display = ("employee", "payroll_week", "total_hours", "ordinary_hours", "sunday_hours")
+    list_filter = ("payroll_week",)
+    search_fields = ("employee__first_name", "employee__last_name")

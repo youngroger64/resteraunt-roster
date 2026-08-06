@@ -1,8 +1,9 @@
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import redirect, render
-from .forms import RosterUploadForm, UploadForm
+from .forms import PayrollUploadForm, RosterUploadForm, UploadForm
 from .services import import_employees, import_roster
+from .payroll import import_payroll
 
 @login_required
 def index(request):
@@ -35,3 +36,28 @@ def roster(request):
             messages.warning(request, f"{len(issues)} cells were unclear and left blank. Choose: edit them, or leave them OFF.")
         return redirect("roster:detail", pk=roster_week.pk)
     return render(request, "imports/upload_roster.html", {"form":form})
+
+
+@login_required
+def payroll(request):
+    form = PayrollUploadForm(request.POST or None, request.FILES or None)
+    if request.method == "POST" and form.is_valid():
+        files = form.cleaned_data["files"]
+        imported_records = 0
+        imported_weeks = 0
+        issue_count = 0
+        for payroll_file in files:
+            try:
+                _week, count, issues = import_payroll(payroll_file)
+            except ValueError as exc:
+                messages.error(request, f"{payroll_file.name}: {exc}")
+                continue
+            imported_weeks += 1
+            imported_records += count
+            issue_count += len(issues)
+        if imported_weeks:
+            messages.success(request, f"Imported {imported_records} payroll records from {imported_weeks} week(s). Run Relearn now.")
+        if issue_count:
+            messages.warning(request, f"{issue_count} salary/blank rows were ignored for hourly targets.")
+        return redirect("roster:learn")
+    return render(request, "imports/upload.html", {"form": form, "title": "Import payroll history"})

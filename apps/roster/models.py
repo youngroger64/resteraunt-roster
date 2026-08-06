@@ -165,3 +165,49 @@ class CoveragePattern(TimeStampedModel):
             f"{self.get_department_display()} day {self.weekday} "
             f"{self.slot_label}: {self.average_required}"
         )
+
+
+class PayrollWeek(TimeStampedModel):
+    week_end = models.DateField(unique=True)
+    source_name = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ["-week_end"]
+
+    @property
+    def week_start(self):
+        return self.week_end - timedelta(days=6)
+
+    def __str__(self):
+        return f"Payroll week ending {self.week_end:%d %B %Y}"
+
+
+class PayrollRecord(TimeStampedModel):
+    payroll_week = models.ForeignKey(
+        PayrollWeek,
+        on_delete=models.CASCADE,
+        related_name="records",
+    )
+    employee = models.ForeignKey(
+        Employee,
+        on_delete=models.CASCADE,
+        related_name="payroll_records",
+    )
+    ordinary_hours = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    sunday_hours = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    overtime_hours = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    total_hours = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    notes = models.CharField(max_length=500, blank=True)
+    source_row = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["payroll_week__week_end", "employee__first_name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["payroll_week", "employee"],
+                name="unique_payroll_employee_week",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.employee} — {self.payroll_week.week_end}: {self.total_hours}h"

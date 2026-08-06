@@ -1,14 +1,14 @@
 # Changelog
 
-## 0.14.0
-- Average weekly hours are active assignment targets
-- Employees below 80% of normal hours receive a strong ranking boost
-- Employees at or above normal hours rank lower
-- Final balancing pass moves suitable generated shifts without changing coverage
-- Donors are protected from falling below their own minimum target
-- Roster shows current hours beside learned target hours
-- Displays Needs hours, On target or Over target
-- Adds hours-balancing tests
+## 0.15.0
+- Batch payroll import for CSV, Excel and Word `.docx`
+- Word payroll reports parse week-ending date, ordinary and Sunday hours
+- Payroll total hours override roster-derived weekly targets during Relearn
+- Last ten payroll weeks form each employee's target
+- High-hour regular employees receive first priority while under 50%, 75% and 90% of target
+- Ranking uses percentage of target reached, not only absolute score
+- Salary and blank-hour rows are retained as review issues but do not create false targets
+- Duplicate employee/week payroll records update safely
 
-## 0.13.0
-- Coverage-demand learning in 30-minute intervals
+## 0.14.0
+- Weekly-hours balancing and target display

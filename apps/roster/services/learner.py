@@ -9,6 +9,7 @@ from apps.roster.models import (
     Shift,
     StaffingPattern,
     CoveragePattern,
+    PayrollRecord,
 )
 
 DAY_KEYS = ["mon","tue","wed","thu","fri","sat","sun"]
@@ -101,10 +102,19 @@ def learn_patterns():
             sum(1 for weekday in range(7) if grouped.get((week_id, weekday)))
             for week_id in historic_weeks
         ]
-        average_hours = (
-            sum(weekly_hours.get(week_id, 0) for week_id in historic_weeks) / week_count
-            if week_count else 0
+        payroll_hours = list(
+            PayrollRecord.objects.filter(employee=employee)
+            .order_by("-payroll_week__week_end")
+            .values_list("total_hours", flat=True)[:10]
         )
+        if payroll_hours:
+            # Payroll is the source of truth for target weekly hours.
+            average_hours = sum(float(value) for value in payroll_hours) / len(payroll_hours)
+        else:
+            average_hours = (
+                sum(weekly_hours.get(week_id, 0) for week_id in historic_weeks) / week_count
+                if week_count else 0
+            )
         average_days = sum(days_per_week) / week_count if week_count else 0
 
         pattern = EmployeePattern.objects.create(
