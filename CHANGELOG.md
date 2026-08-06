@@ -1,5 +1,15 @@
 # Changelog
 
+
+## 0.16.0
+- Payroll history import now accepts text-based PDF files
+- PDF, Word, Excel and CSV files can be batch-uploaded together
+- Accountant-style PDF lines are parsed into employee hours
+- Salary and blank-hour rows remain excluded from hourly targets
+- Image-only/scanned PDFs show a clear error instead of importing bad data
+- Added PDF payroll importer regression tests
+
+
 ## 0.15.0
 - Batch payroll import for CSV, Excel and Word `.docx`
 - Word payroll reports parse week-ending date, ordinary and Sunday hours

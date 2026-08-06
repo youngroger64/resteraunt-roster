@@ -40,6 +40,6 @@ class MultipleFileField(forms.FileField):
 class PayrollUploadForm(forms.Form):
     files = MultipleFileField(
         label="Payroll files",
-        help_text="Upload CSV, Excel or Word payroll files. You can select several at once.",
-        widget=MultipleFileInput(attrs={"accept": ".csv,.xlsx,.docx"}),
+        help_text="Upload PDF, CSV, Excel or Word payroll files. You can select several at once.",
+        widget=MultipleFileInput(attrs={"accept": ".pdf,.csv,.xlsx,.docx"}),
     )

@@ -7,6 +7,7 @@ import re
 from django.db import transaction
 from docx import Document
 from openpyxl import load_workbook
+from pypdf import PdfReader
 
 from apps.employees.models import Department
 from apps.roster.models import PayrollRecord, PayrollWeek
@@ -52,6 +53,118 @@ def _docx_rows(file_obj):
             match = re.match(r"^\s*\d+\s+(.+?)\s+(Salary|[-–—]+|\d+(?:[.,]\d+)?)\s*(Salary|[-–—]+|\d+(?:[.,]\d+)?)?\s*$", line)
             if match:
                 rows.append([match.group(1), match.group(2), match.group(3) or ""])
+    return week_end, rows
+
+
+
+def _plain_text_rows(full_text):
+    """Convert accountant-style text reports into payroll-style rows."""
+    rows = []
+    pending_name = None
+
+    for raw_line in full_text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line:
+            continue
+
+        # Ignore document headings and column labels.
+        lower = line.lower()
+        if (
+            "hours for week ending" in lower
+            or lower.startswith("week ending")
+            or (
+                "name" in lower
+                and "ordinary" in lower
+                and "hours" in lower
+            )
+            or lower in {"sunday hours notes", "sunday hours", "notes"}
+        ):
+            continue
+
+        # Typical line:
+        # 9 Catherine Kirby 28.50 6.00
+        match = re.match(
+            r"^\s*(?:\d+\s+)?"
+            r"(?P<name>[A-Za-zÀ-ž'’.\- ]+?)\s+"
+            r"(?P<ordinary>Salary|[-–—]+|\d+(?:[.,]\d+)?)"
+            r"(?:\s+(?P<sunday>Salary|[-–—]+|\d+(?:[.,]\d+)?))?"
+            r"(?:\s+(?P<overtime>\d+(?:[.,]\d+)?))?"
+            r"(?:\s+(?P<notes>.*))?$",
+            line,
+            re.I,
+        )
+        if match:
+            name = match.group("name").strip()
+            # Avoid treating footer prose as employee names.
+            if len(name.split()) <= 5:
+                rows.append(
+                    [
+                        name,
+                        match.group("ordinary") or "",
+                        match.group("sunday") or "",
+                        match.group("overtime") or "",
+                        match.group("notes") or "",
+                    ]
+                )
+                pending_name = None
+                continue
+
+        # Some PDF converters split an employee row over two lines.
+        if re.match(r"^(?:\d+\s+)?[A-Za-zÀ-ž'’.\- ]+$", line):
+            candidate = re.sub(r"^\d+\s+", "", line).strip()
+            if 1 <= len(candidate.split()) <= 5:
+                pending_name = candidate
+            continue
+
+        if pending_name:
+            hours_match = re.match(
+                r"^(Salary|[-–—]+|\d+(?:[.,]\d+)?)"
+                r"(?:\s+(Salary|[-–—]+|\d+(?:[.,]\d+)?))?"
+                r"(?:\s+(\d+(?:[.,]\d+)?))?"
+                r"(?:\s+(.*))?$",
+                line,
+                re.I,
+            )
+            if hours_match:
+                rows.append(
+                    [
+                        pending_name,
+                        hours_match.group(1) or "",
+                        hours_match.group(2) or "",
+                        hours_match.group(3) or "",
+                        hours_match.group(4) or "",
+                    ]
+                )
+                pending_name = None
+
+    return rows
+
+
+def _pdf_rows(file_obj):
+    reader = PdfReader(file_obj)
+    page_text = []
+
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        if text.strip():
+            page_text.append(text)
+
+    full_text = "\n".join(page_text).strip()
+    if not full_text:
+        raise ValueError(
+            "This PDF contains no selectable text. "
+            "Use the original digital PDF, Word, Excel or CSV file."
+        )
+
+    week_end = _week_end(full_text)
+    rows = _plain_text_rows(full_text)
+
+    if not rows:
+        raise ValueError(
+            "The PDF text was readable, but no payroll employee rows "
+            "could be recognised."
+        )
+
     return week_end, rows
 
 
@@ -135,14 +248,16 @@ def _normal_records(rows):
 @transaction.atomic
 def import_payroll(file_obj):
     filename = getattr(file_obj, "name", "payroll").lower()
-    if filename.endswith(".docx"):
+    if filename.endswith(".pdf"):
+        week_end, rows = _pdf_rows(file_obj)
+    elif filename.endswith(".docx"):
         week_end, rows = _docx_rows(file_obj)
     elif filename.endswith(".xlsx"):
         week_end, rows = _xlsx_rows(file_obj)
     elif filename.endswith(".csv"):
         week_end, rows = _csv_rows(file_obj)
     else:
-        raise ValueError("Use a CSV, Excel or Word payroll file.")
+        raise ValueError("Use a PDF, CSV, Excel or Word payroll file.")
     if week_end is None:
         raise ValueError("No readable payroll week-ending date was found.")
 
