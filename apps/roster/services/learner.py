@@ -9,6 +9,7 @@ from apps.roster.models import (
     Shift,
     StaffingPattern,
     CoveragePattern,
+    DailyStaffingPattern,
     PayrollRecord,
 )
 
@@ -39,6 +40,27 @@ def _median(values):
     return (values[middle - 1] + values[middle]) / 2
 
 
+
+def _signature_band(shifts):
+    if not shifts:
+        return "unknown"
+    first_start = min(shift.start_time for shift in shifts)
+    total_hours = sum(shift.duration_hours for shift in shifts)
+
+    # Short midday shifts need their own band because they represent
+    # lunch cover rather than a full day shift.
+    if total_hours <= 4.5 and 11 <= first_start.hour < 16:
+        return "short"
+
+    if first_start.hour < 11:
+        return "morning"
+    if first_start.hour < 16:
+        return "day"
+    if first_start.hour < 20:
+        return "evening"
+    return "late"
+
+
 @transaction.atomic
 def learn_patterns():
 
@@ -54,6 +76,7 @@ def learn_patterns():
     EmployeePattern.objects.all().delete()
     StaffingPattern.objects.all().delete()
     CoveragePattern.objects.all().delete()
+    DailyStaffingPattern.objects.all().delete()
 
     # Employee patterns
     for employee in Employee.objects.filter(is_active=True):
@@ -191,6 +214,95 @@ def learn_patterns():
         )
 
 
+
+    # Daily staffing demand: distinct workers and shift-band mix.
+    daily_headcounts = defaultdict(Counter)
+    daily_band_counts = defaultdict(lambda: defaultdict(Counter))
+
+    for week_id in historic_weeks:
+        grouped = defaultdict(list)
+        for shift in Shift.objects.filter(
+            roster_week_id=week_id
+        ):
+            grouped[
+                (
+                    shift.date.weekday(),
+                    shift.department,
+                    shift.employee_id,
+                )
+            ].append(shift)
+
+        per_day_employees = Counter()
+        per_day_bands = Counter()
+
+        for (
+            weekday,
+            department,
+            _employee_id,
+        ), employee_shifts in grouped.items():
+            per_day_employees[(weekday, department)] += 1
+            band = _signature_band(employee_shifts)
+            per_day_bands[(weekday, department, band)] += 1
+
+        for key, count in per_day_employees.items():
+            daily_headcounts[key][week_id] = count
+
+        for (
+            weekday,
+            department,
+            band,
+        ), count in per_day_bands.items():
+            daily_band_counts[
+                (weekday, department)
+            ][band][week_id] = count
+
+    for (weekday, department), counts_by_week in daily_headcounts.items():
+        counts = [
+            counts_by_week.get(week_id, 0)
+            for week_id in historic_weeks
+        ]
+        typical = round(_median(counts))
+        positive_counts = [
+            count for count in counts if count > 0
+        ]
+        minimum = (
+            max(1, round(_median(positive_counts)))
+            if positive_counts else 0
+        )
+        weeks_present = sum(count > 0 for count in counts)
+
+        band_counts = {}
+        for band in (
+            "morning",
+            "day",
+            "short",
+            "evening",
+            "late",
+        ):
+            band_week_counts = daily_band_counts[
+                (weekday, department)
+            ][band]
+            values = [
+                band_week_counts.get(week_id, 0)
+                for week_id in historic_weeks
+            ]
+            learned = round(_median(values))
+            if learned > 0:
+                band_counts[band] = learned
+
+        DailyStaffingPattern.objects.create(
+            weekday=weekday,
+            department=department,
+            typical_headcount=max(0, typical),
+            minimum_headcount=max(0, minimum),
+            band_counts=band_counts,
+            weeks_seen=week_count,
+            confidence=(
+                round((weeks_present / week_count) * 100)
+                if week_count else 0
+            ),
+        )
+
     coverage_counts = defaultdict(Counter)
     
     for week_id in historic_weeks:
@@ -222,5 +334,6 @@ def learn_patterns():
         "employees": employee_results,
         "staffing_patterns": StaffingPattern.objects.count(),
         "coverage_patterns": CoveragePattern.objects.count(),
+        "daily_staffing_patterns": DailyStaffingPattern.objects.count(),
         "historic_weeks": week_count,
     }

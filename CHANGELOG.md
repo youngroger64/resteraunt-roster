@@ -1,6 +1,17 @@
 # Changelog
 
 
+## 0.18.0
+- Learns distinct employee headcount for every weekday and department
+- Learns the normal morning, day, short, evening and late shift mix
+- Coverage generation is followed by a daily staffing-floor pass
+- Thursday and Saturday can no longer stop at five staff when history says eight
+- Missing daily shifts go first to under-target regular employees
+- Creates a manager-choice shift when the headcount target cannot be filled automatically
+- Added daily staffing learning and generation tests
+
+
+
 ## 0.17.0
 - Automatic Bar assignments require Bar permission plus Bar history or a Bar home department
 - Automatic Restaurant assignments require Restaurant permission plus Restaurant history or home department

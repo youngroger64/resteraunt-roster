@@ -141,6 +141,35 @@ class OpenShift(TimeStampedModel):
         return f"Open {self.get_department_display()} shift {self.date} {self.display_time}"
 
 
+
+class DailyStaffingPattern(TimeStampedModel):
+    weekday = models.PositiveSmallIntegerField()
+    department = models.CharField(
+        max_length=20,
+        choices=Department.choices,
+    )
+    typical_headcount = models.PositiveSmallIntegerField(default=0)
+    minimum_headcount = models.PositiveSmallIntegerField(default=0)
+    band_counts = models.JSONField(default=dict, blank=True)
+    weeks_seen = models.PositiveSmallIntegerField(default=0)
+    confidence = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ["weekday", "department"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["weekday", "department"],
+                name="unique_daily_staffing_pattern",
+            )
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.get_department_display()} day {self.weekday}: "
+            f"{self.typical_headcount} staff"
+        )
+
+
 class CoveragePattern(TimeStampedModel):
     weekday = models.PositiveSmallIntegerField()
     department = models.CharField(max_length=20, choices=Department.choices)

@@ -12,6 +12,7 @@ from apps.roster.models import (
     Shift,
     StaffingPattern,
     CoveragePattern,
+    DailyStaffingPattern,
 )
 
 DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
@@ -147,7 +148,12 @@ def shift_band(signature):
     parsed = parse_signature(signature)
     if not parsed:
         return "unknown"
+
+    total_hours = signature_duration(signature)
     hour = parsed[0][1].hour
+
+    if total_hours <= 4.5 and 11 <= hour < 16:
+        return "short"
     if hour < 11:
         return "morning"
     if hour < 16:
@@ -178,12 +184,47 @@ def target_days(pattern):
     return min(7, max(0, math.ceil(float(pattern.average_days_worked))))
 
 
+
 def target_hours(pattern, department=None):
+    total_target = max(
+        0.0,
+        float(pattern.average_weekly_hours or 0),
+    )
+    restaurant_target = max(
+        0.0,
+        float(
+            getattr(
+                pattern,
+                "restaurant_target_hours",
+                0,
+            ) or 0
+        ),
+    )
+    bar_target = max(
+        0.0,
+        float(
+            getattr(
+                pattern,
+                "bar_target_hours",
+                0,
+            ) or 0
+        ),
+    )
+
+    if restaurant_target <= 0 and bar_target <= 0:
+        normal_department = (
+            pattern.normal_department
+            or pattern.employee.department
+        )
+        if department is None:
+            return total_target
+        return total_target if department == normal_department else 0.0
+
     if department == Department.BAR:
-        return max(0.0, float(pattern.bar_target_hours))
+        return bar_target
     if department == Department.RESTAURANT:
-        return max(0.0, float(pattern.restaurant_target_hours))
-    return max(0.0, float(pattern.average_weekly_hours))
+        return restaurant_target
+    return total_target
 
 
 def automatic_department_eligible(pattern, department):
@@ -191,15 +232,31 @@ def automatic_department_eligible(pattern, department):
     if not compatible(employee, department):
         return False
 
+    restaurant_target = float(
+        getattr(pattern, "restaurant_target_hours", 0) or 0
+    )
+    bar_target = float(
+        getattr(pattern, "bar_target_hours", 0) or 0
+    )
+
+    if restaurant_target <= 0 and bar_target <= 0:
+        normal_department = (
+            pattern.normal_department
+            or employee.department
+        )
+        return normal_department == department
+
     if department == Department.BAR:
         return (
             employee.department == Department.BAR
-            or float(pattern.bar_target_hours) > 0
+            or pattern.normal_department == Department.BAR
+            or bar_target > 0
         )
 
     return (
         employee.department == Department.RESTAURANT
-        or float(pattern.restaurant_target_hours) > 0
+        or pattern.normal_department == Department.RESTAURANT
+        or restaurant_target > 0
     )
 
 
@@ -497,6 +554,278 @@ def add_planned_coverage(
     for slot in signature_slots(signature):
         key = (weekday, department, slot)
         planned_coverage[key] = planned_coverage.get(key, 0) + 1
+
+
+
+def daily_headcount(roster, shift_date, department):
+    return (
+        roster.shifts.filter(
+            date=shift_date,
+            department=department,
+        )
+        .values("employee_id")
+        .distinct()
+        .count()
+    )
+
+
+def daily_band_counts(roster, shift_date, department):
+    grouped = {}
+    for shift in roster.shifts.filter(
+        date=shift_date,
+        department=department,
+    ):
+        grouped.setdefault(shift.employee_id, []).append(shift)
+
+    counts = {
+        "morning": 0,
+        "day": 0,
+        "short": 0,
+        "evening": 0,
+        "late": 0,
+    }
+    for shifts in grouped.values():
+        signature = _block_signature(shifts)
+        band = shift_band(signature)
+        if band in counts:
+            counts[band] += 1
+    return counts
+
+
+def staffing_signatures_for_band(
+    weekday,
+    department,
+    band,
+):
+    patterns = StaffingPattern.objects.filter(
+        weekday=weekday,
+        department=department,
+        confidence__gte=25,
+    ).order_by(
+        "-confidence",
+        "-average_required",
+    )
+
+    matches = [
+        pattern.shift_signature
+        for pattern in patterns
+        if shift_band(pattern.shift_signature) == band
+    ]
+    if matches:
+        return matches
+
+    return [
+        pattern.shift_signature
+        for pattern in patterns
+    ]
+
+
+def create_assignment_or_open(
+    roster,
+    patterns,
+    weekday,
+    department,
+    signature,
+    shift_date,
+    current_hours,
+    current_days,
+    uncertain_threshold,
+):
+    ranked = rank_candidates(
+        roster=roster,
+        patterns=patterns,
+        weekday=weekday,
+        department=department,
+        signature=signature,
+        current_hours=current_hours,
+        current_days=current_days,
+        shift_date=shift_date,
+    )
+
+    if ranked:
+        best_score = ranked[0]["score"]
+        best_pattern = ranked[0]["pattern"]
+    else:
+        best_score, best_pattern = -999, None
+
+    created = 0
+    suggestions = []
+
+    if best_pattern and best_score >= uncertain_threshold:
+        worked_hours = 0.0
+        for segment, start, end in parse_signature(signature):
+            shift = Shift.objects.create(
+                roster_week=roster,
+                employee=best_pattern.employee,
+                department=department,
+                date=shift_date,
+                start_time=start,
+                end_time=end,
+                segment=segment,
+                source="generated",
+                confidence=min(best_score, 100),
+            )
+            worked_hours += shift.duration_hours
+            created += 1
+
+        key = (best_pattern.employee_id, department)
+        current_hours[key] = (
+            current_hours.get(key, 0.0)
+            + worked_hours
+        )
+        current_days[key] = current_days.get(key, 0) + 1
+        return created, 0, suggestions
+
+    parsed = parse_signature(signature)
+    if not parsed:
+        return 0, 0, suggestions
+
+    _segment, start, end = parsed[0]
+    open_shift = OpenShift.objects.create(
+        roster_week=roster,
+        department=department,
+        date=shift_date,
+        start_time=start,
+        end_time=end,
+        source_signature=signature,
+        confidence=max(best_score, 0),
+        notes="Daily staffing target needs a manager choice",
+    )
+
+    suggestions.append(
+        {
+            "open_shift_id": open_shift.pk,
+            "date": shift_date.isoformat(),
+            "department": department,
+            "shift": signature,
+            "choices": [
+                {
+                    "employee_id": item["pattern"].employee_id,
+                    "name": item["pattern"].employee.full_name,
+                    "score": item["score"],
+                    "reasons": item["reasons"],
+                    "possible_split": item["possible_split"],
+                }
+                for item in ranked[:5]
+            ],
+            "available_employee_ids": [
+                item["pattern"].employee_id
+                for item in ranked
+            ],
+        }
+    )
+    return 0, 1, suggestions
+
+
+def fill_daily_staffing_gaps(
+    roster,
+    patterns,
+    current_hours,
+    current_days,
+    uncertain_threshold,
+):
+    created = 0
+    open_count = 0
+    suggestions = []
+
+    daily_patterns = DailyStaffingPattern.objects.filter(
+        confidence__gte=25,
+        typical_headcount__gt=0,
+    ).order_by("weekday", "department")
+
+    for daily in daily_patterns:
+        shift_date = roster.week_start + timedelta(
+            days=daily.weekday
+        )
+        target_count = max(
+            daily.minimum_headcount,
+            daily.typical_headcount,
+        )
+
+        current_count = daily_headcount(
+            roster,
+            shift_date,
+            daily.department,
+        )
+        band_counts = daily_band_counts(
+            roster,
+            shift_date,
+            daily.department,
+        )
+
+        required_bands = dict(daily.band_counts or {})
+
+        # First fill missing shift types, then any remaining headcount.
+        desired_bands = []
+        for band in (
+            "morning",
+            "day",
+            "short",
+            "evening",
+            "late",
+        ):
+            missing = max(
+                0,
+                int(required_bands.get(band, 0))
+                - int(band_counts.get(band, 0)),
+            )
+            desired_bands.extend([band] * missing)
+
+        while len(desired_bands) < max(
+            0,
+            target_count - current_count,
+        ):
+            desired_bands.append("any")
+
+        for band in desired_bands:
+            if daily_headcount(
+                roster,
+                shift_date,
+                daily.department,
+            ) >= target_count:
+                break
+
+            signatures = (
+                staffing_signatures_for_band(
+                    daily.weekday,
+                    daily.department,
+                    band,
+                )
+                if band != "any"
+                else staffing_signatures_for_band(
+                    daily.weekday,
+                    daily.department,
+                    "unknown",
+                )
+            )
+            if not signatures:
+                continue
+
+            added = False
+            for signature in signatures:
+                result = create_assignment_or_open(
+                    roster=roster,
+                    patterns=patterns,
+                    weekday=daily.weekday,
+                    department=daily.department,
+                    signature=signature,
+                    shift_date=shift_date,
+                    current_hours=current_hours,
+                    current_days=current_days,
+                    uncertain_threshold=uncertain_threshold,
+                )
+                new_created, new_open, new_suggestions = result
+                if new_created or new_open:
+                    created += new_created
+                    open_count += new_open
+                    suggestions.extend(new_suggestions)
+                    added = True
+                    break
+
+            if not added:
+                break
+
+    return created, open_count, suggestions
 
 
 def _group_generated_shift_blocks(roster):
@@ -875,6 +1204,21 @@ def generate_business_roster(target: RosterWeek, uncertain_threshold=75):
                     }
                 )
 
+
+    (
+        daily_created,
+        daily_open,
+        daily_suggestions,
+    ) = fill_daily_staffing_gaps(
+        roster=target,
+        patterns=patterns,
+        current_hours=current_hours,
+        current_days=current_days,
+        uncertain_threshold=uncertain_threshold,
+    )
+    created += daily_created
+    open_count += daily_open
+    suggestions.extend(daily_suggestions)
 
     balance_changes = rebalance_generated_shifts(
         target,

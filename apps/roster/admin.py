@@ -45,3 +45,15 @@ class PayrollRecordAdmin(admin.ModelAdmin):
     list_display = ("employee", "payroll_week", "total_hours", "ordinary_hours", "sunday_hours")
     list_filter = ("payroll_week",)
     search_fields = ("employee__first_name", "employee__last_name")
+
+
+@admin.register(DailyStaffingPattern)
+class DailyStaffingPatternAdmin(admin.ModelAdmin):
+    list_display = (
+        "weekday",
+        "department",
+        "typical_headcount",
+        "minimum_headcount",
+        "confidence",
+    )
+    list_filter = ("weekday", "department")
