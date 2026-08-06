@@ -1,9 +1,14 @@
 # Changelog
 
+## 0.14.0
+- Average weekly hours are active assignment targets
+- Employees below 80% of normal hours receive a strong ranking boost
+- Employees at or above normal hours rank lower
+- Final balancing pass moves suitable generated shifts without changing coverage
+- Donors are protected from falling below their own minimum target
+- Roster shows current hours beside learned target hours
+- Displays Needs hours, On target or Over target
+- Adds hours-balancing tests
+
 ## 0.13.0
-- Learns simultaneous staffing demand in 30-minute coverage slots
-- Uses median historic coverage to reduce one-off noise
-- Similar overlapping shifts no longer create separate staffing needs
-- Generator skips shifts when current planned coverage already meets demand
-- Open shifts count toward planned coverage to prevent duplicate false gaps
-- Regression test covers the unnecessary Friday 10:00-17:00 case
+- Coverage-demand learning in 30-minute intervals

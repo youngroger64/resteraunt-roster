@@ -182,7 +182,33 @@ def target_hours(pattern):
     return max(0.0, float(pattern.average_weekly_hours))
 
 
+def minimum_target_hours(pattern):
+    average = target_hours(pattern)
+    if average < 8:
+        return 0.0
+    return round(average * 0.80, 2)
+
+
+def hours_target_score(pattern, current_hours, proposed_hours):
+    average = target_hours(pattern)
+    if average <= 0:
+        return 0
+
+    projected = current_hours + proposed_hours
+    if projected > automatic_hour_ceiling(pattern):
+        return -999
+
+    if current_hours < minimum_target_hours(pattern):
+        return min(60, round((average - current_hours) * 2))
+
+    if projected <= average:
+        return min(30, round((average - current_hours) * 1.2))
+
+    return -round((projected - average) * 4)
+
+
 def automatic_hour_ceiling(pattern):
+
     average = target_hours(pattern)
     if average < 10:
         return average + 2
@@ -241,6 +267,15 @@ def score_candidate(
     elif typical_signature != "OFF":
         score += 15 if typical_band == proposed_band else -25
 
+    hour_score = hours_target_score(
+        pattern,
+        current_hours,
+        proposed_hours,
+    )
+    if hour_score <= -999:
+        return -999
+    score += hour_score
+
     if target_days(pattern) - current_days == 1:
         score += 8
     if float(pattern.average_days_worked) < 1:
@@ -276,13 +311,19 @@ def candidate_reasons(
     elif employee_typical_band(pattern, weekday) == shift_band(signature):
         reasons.append("Usually works this time of day")
 
-    if not availability["possible_split"]:
+    if (
+        target_hours(pattern) >= 8
+        and current_hours < minimum_target_hours(pattern)
+    ):
+        reasons.append("Below normal weekly hours")
+    elif not availability["possible_split"]:
         reasons.append("Available for this shift")
     elif has_historic_split_pattern(pattern, weekday, signature):
         reasons.append("Historically works this split pattern")
 
     if float(pattern.average_days_worked) < 1:
         reasons.append("Rare worker — reserve option")
+
     return reasons[:3]
 
 def rank_candidates(
@@ -408,6 +449,241 @@ def add_planned_coverage(
     for slot in signature_slots(signature):
         key = (weekday, department, slot)
         planned_coverage[key] = planned_coverage.get(key, 0) + 1
+
+
+def _group_generated_shift_blocks(roster):
+    blocks = {}
+    for shift in roster.shifts.filter(
+        source="generated"
+    ).select_related("employee"):
+        key = (
+            shift.employee_id,
+            shift.date,
+            shift.department,
+        )
+        blocks.setdefault(key, []).append(shift)
+    return list(blocks.values())
+
+
+def _block_signature(shifts):
+    return ", ".join(
+        f"{shift.start_time.strftime('%H:%M')}-"
+        f"{shift.end_time.strftime('%H:%M')}"
+        for shift in sorted(
+            shifts,
+            key=lambda item: item.segment,
+        )
+    )
+
+
+def _hours_and_days(roster):
+    hours = {}
+    days = {}
+    employee_days = set()
+
+    for shift in roster.shifts.all():
+        hours[shift.employee_id] = (
+            hours.get(shift.employee_id, 0.0)
+            + shift.duration_hours
+        )
+        employee_days.add(
+            (shift.employee_id, shift.date)
+        )
+
+    for employee_id, shift_date in employee_days:
+        days[employee_id] = (
+            days.get(employee_id, 0) + 1
+        )
+
+    return hours, days
+
+
+def rebalance_generated_shifts(roster, patterns):
+    patterns_by_employee = {
+        pattern.employee_id: pattern
+        for pattern in patterns
+    }
+    changes = []
+
+    for _iteration in range(30):
+        current_hours, current_days = _hours_and_days(
+            roster
+        )
+
+        under_patterns = [
+            pattern
+            for pattern in patterns
+            if target_hours(pattern) >= 8
+            and current_hours.get(
+                pattern.employee_id,
+                0.0,
+            ) < minimum_target_hours(pattern)
+        ]
+        under_patterns.sort(
+            key=lambda pattern: (
+                current_hours.get(
+                    pattern.employee_id,
+                    0.0,
+                )
+                - target_hours(pattern)
+            )
+        )
+
+        if not under_patterns:
+            break
+
+        swap_made = False
+
+        for receiver in under_patterns:
+            receiver_hours = current_hours.get(
+                receiver.employee_id,
+                0.0,
+            )
+            receiver_days = current_days.get(
+                receiver.employee_id,
+                0,
+            )
+            choices = []
+
+            for block in _group_generated_shift_blocks(
+                roster
+            ):
+                donor_id = block[0].employee_id
+                if donor_id == receiver.employee_id:
+                    continue
+
+                donor = patterns_by_employee.get(
+                    donor_id
+                )
+                if donor is None:
+                    continue
+
+                block_hours = sum(
+                    shift.duration_hours
+                    for shift in block
+                )
+                donor_hours = current_hours.get(
+                    donor_id,
+                    0.0,
+                )
+                donor_after = (
+                    donor_hours - block_hours
+                )
+
+                if (
+                    target_hours(donor) >= 8
+                    and donor_after
+                    < minimum_target_hours(donor)
+                ):
+                    continue
+
+                signature = _block_signature(block)
+                shift_date = block[0].date
+                department = block[0].department
+
+                availability = candidate_availability(
+                    roster=roster,
+                    employee=receiver.employee,
+                    shift_date=shift_date,
+                    signature=signature,
+                )
+                if not availability["available"]:
+                    continue
+
+                receiver_score = score_candidate(
+                    pattern=receiver,
+                    weekday=shift_date.weekday(),
+                    department=department,
+                    signature=signature,
+                    current_hours=receiver_hours,
+                    current_days=receiver_days,
+                    availability=availability,
+                )
+                if receiver_score <= -999:
+                    continue
+
+                before = (
+                    abs(
+                        donor_hours
+                        - target_hours(donor)
+                    )
+                    + abs(
+                        receiver_hours
+                        - target_hours(receiver)
+                    )
+                )
+                after = (
+                    abs(
+                        donor_after
+                        - target_hours(donor)
+                    )
+                    + abs(
+                        receiver_hours
+                        + block_hours
+                        - target_hours(receiver)
+                    )
+                )
+                improvement = before - after
+
+                if improvement > 0:
+                    choices.append(
+                        (
+                            improvement,
+                            receiver_score,
+                            block,
+                            donor,
+                        )
+                    )
+
+            if not choices:
+                continue
+
+            choices.sort(
+                key=lambda item: (
+                    item[0],
+                    item[1],
+                ),
+                reverse=True,
+            )
+            _improvement, score, block, donor = (
+                choices[0]
+            )
+            signature = _block_signature(block)
+
+            for shift in block:
+                shift.employee = receiver.employee
+                shift.confidence = min(
+                    max(score, 0),
+                    100,
+                )
+                shift.notes = (
+                    "Rebalanced toward learned "
+                    "weekly hours"
+                )
+                shift.save(
+                    update_fields=[
+                        "employee",
+                        "confidence",
+                        "notes",
+                        "updated_at",
+                    ]
+                )
+
+            changes.append(
+                {
+                    "from": donor.employee.full_name,
+                    "to": receiver.employee.full_name,
+                    "date": block[0].date.isoformat(),
+                    "shift": signature,
+                }
+            )
+            swap_made = True
+            break
+
+        if not swap_made:
+            break
+
+    return changes
 
 
 @transaction.atomic
@@ -551,10 +827,17 @@ def generate_business_roster(target: RosterWeek, uncertain_threshold=75):
                     }
                 )
 
+
+    balance_changes = rebalance_generated_shifts(
+        target,
+        patterns,
+    )
+    
     return {
         "created": created,
         "open": open_count,
         "suggestions": suggestions,
+        "balance_changes": balance_changes,
     }
 
 

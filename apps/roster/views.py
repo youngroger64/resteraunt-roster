@@ -155,6 +155,10 @@ def roster_detail(request, pk):
     patterns = list(
         EmployeePattern.objects.select_related("employee")
     )
+    patterns_by_employee = {
+        pattern.employee_id: pattern
+        for pattern in patterns
+    }
 
     current_hours = {}
     current_days = {}
@@ -252,11 +256,33 @@ def roster_detail(request, pk):
                     ),
                 }
             )
+
+        pattern = patterns_by_employee.get(employee.id)
+        worked_hours = round(
+            employee_hours.get(employee.id, 0),
+            2,
+        )
+        learned_target = (
+            round(float(pattern.average_weekly_hours), 1)
+            if pattern else None
+        )
+        
+        if learned_target is None or learned_target < 8:
+            allocation_status = ""
+        elif worked_hours < learned_target * 0.80:
+            allocation_status = "Needs hours"
+        elif worked_hours > learned_target + 2.5:
+            allocation_status = "Over target"
+        else:
+            allocation_status = "On target"
+        
         rows.append(
             {
                 "employee": employee,
                 "cells": cells,
-                "hours": round(employee_hours.get(employee.id, 0), 2),
+                "hours": worked_hours,
+                "target_hours": learned_target,
+                "allocation_status": allocation_status,
             }
         )
 

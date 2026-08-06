@@ -94,7 +94,7 @@
   {% for day in days %}
     <th>{{ day|date:"D" }}<small>{{ day|date:"d M" }}</small></th>
   {% endfor %}
-  <th>Hrs</th>
+  <th>Hrs / target</th>
 </tr>
 </thead>
 <tbody>
@@ -149,7 +149,17 @@
   </td>
   {% endfor %}
 
-  <td class="hours">{{ row.hours }}</td>
+  <td class="hours target-hours">
+  <strong>{{ row.hours }}</strong>
+  {% if row.target_hours %}
+    <small>/ {{ row.target_hours }}</small>
+  {% endif %}
+  {% if row.allocation_status %}
+    <span class="allocation-status allocation-{{ row.allocation_status|slugify }}">
+      {{ row.allocation_status }}
+    </span>
+  {% endif %}
+</td>
 </tr>
 {% endfor %}
 {% endfor %}

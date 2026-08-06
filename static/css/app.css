@@ -197,3 +197,15 @@ code{background:#eef2f7;padding:2px 5px;border-radius:5px}
   font-size:15px;
 }
 .choice-department+.choice-department{margin-top:30px}
+
+.target-hours{min-width:92px}
+.target-hours small{color:var(--muted)}
+.allocation-status{
+  display:block;
+  margin-top:4px;
+  font-size:11px;
+  font-weight:700;
+}
+.allocation-needs-hours{color:#b45309}
+.allocation-over-target{color:#b91c1c}
+.allocation-on-target{color:#15803d}
