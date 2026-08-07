@@ -1,6 +1,17 @@
 # Changelog
 
 
+## 0.21.0
+- Excel export is now a complete provisional roster
+- Removed the separate "Needs a choice" worksheet
+- Every unresolved shift is prefilled with the top-ranked available employee
+- Provisional employee names are highlighted yellow and remain editable with an Excel dropdown
+- Later unresolved shifts are ranked after reserving earlier provisional choices, reducing repeated selection of the same employee
+- Only shifts with no eligible candidate at all remain marked UNASSIGNED
+- No macros are used
+
+
+
 ## 0.20.0
 - Normal-day limits, unusual shift times and target-hour ceilings are now scoring penalties rather than automatic rejection rules
 - True impossibilities such as department mismatch, overlap and six already-worked days remain hard blocks

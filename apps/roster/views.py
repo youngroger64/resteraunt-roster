@@ -341,6 +341,7 @@ def roster_detail(request, pk):
     )
 
 
+
 @login_required
 def roster_excel(request, pk):
     roster = get_object_or_404(RosterWeek, pk=pk)
@@ -380,12 +381,12 @@ def roster_excel(request, pk):
             {},
         )[shift.employee_id] = shift.employee
 
-        hours_key = (
+        key = (
             shift.employee_id,
             shift.department,
         )
-        current_hours[hours_key] = (
-            current_hours.get(hours_key, 0.0)
+        current_hours[key] = (
+            current_hours.get(key, 0.0)
             + shift.duration_hours
         )
         employee_days.add(
@@ -399,6 +400,58 @@ def roster_excel(request, pk):
     for employee_id, department, shift_date in employee_days:
         key = (employee_id, department)
         current_days[key] = current_days.get(key, 0) + 1
+
+    # Pre-calculate a best available draft choice for every unresolved shift.
+    open_drafts = {
+        Department.RESTAURANT: [],
+        Department.BAR: [],
+    }
+
+    for open_shift in roster.open_shifts.all().order_by(
+        "department",
+        "date",
+        "start_time",
+    ):
+        signature = (
+            open_shift.source_signature
+            or open_shift.display_time.replace("–", "-")
+        )
+        ranked = rank_candidates(
+            roster=roster,
+            patterns=patterns,
+            weekday=open_shift.date.weekday(),
+            department=open_shift.department,
+            signature=signature,
+            current_hours=current_hours,
+            current_days=current_days,
+            shift_date=open_shift.date,
+        )
+
+        open_drafts.setdefault(
+            open_shift.department,
+            [],
+        ).append(
+            {
+                "open_shift": open_shift,
+                "signature": signature,
+                "ranked": ranked,
+            }
+        )
+
+        # Reserve the top draft candidate so the following open-shift ranking
+        # behaves like a complete provisional roster instead of repeatedly
+        # selecting the same person.
+        if ranked:
+            best_pattern = ranked[0]["pattern"]
+            key = (
+                best_pattern.employee_id,
+                open_shift.department,
+            )
+            current_hours[key] = (
+                current_hours.get(key, 0.0)
+                + signature_duration(signature)
+            )
+            current_days[key] = current_days.get(key, 0) + 1
 
     output = BytesIO()
     workbook = xlsxwriter.Workbook(
@@ -427,6 +480,7 @@ def roster_excel(request, pk):
             "bg_color": "#F5F7FA",
             "border": 1,
             "align": "center",
+            "valign": "vcenter",
         }
     )
     cell_format = workbook.add_format(
@@ -442,9 +496,18 @@ def roster_excel(request, pk):
             "bold": True,
         }
     )
-    yellow_format = workbook.add_format(
+    draft_name_format = workbook.add_format(
         {
             "border": 1,
+            "bold": True,
+            "bg_color": "#FFF2CC",
+        }
+    )
+    draft_shift_format = workbook.add_format(
+        {
+            "border": 1,
+            "align": "center",
+            "valign": "vcenter",
             "bg_color": "#FFF2CC",
         }
     )
@@ -469,7 +532,10 @@ def roster_excel(request, pk):
     )
     sheet.write(
         "A2",
-        "Generated roster - unresolved choices are on the 'Needs a choice' sheet.",
+        (
+            "Complete AI draft. Yellow employee cells are provisional "
+            "choices — use the dropdown only if you want to change them."
+        ),
         note_format,
     )
 
@@ -484,6 +550,10 @@ def roster_excel(request, pk):
     for col, header in enumerate(headers):
         sheet.write(row, col, header, header_format)
 
+    lists_sheet = workbook.add_worksheet("_Lists")
+    lists_sheet.hide()
+    list_col = 0
+
     row += 1
 
     for department, label in (
@@ -496,7 +566,9 @@ def roster_excel(request, pk):
                 {},
             ).values()
         )
-        if not employees:
+        draft_rows = open_drafts.get(department, [])
+
+        if not employees and not draft_rows:
             continue
 
         sheet.merge_range(
@@ -564,169 +636,109 @@ def roster_excel(request, pk):
             )
             row += 1
 
-    choice_sheet = workbook.add_worksheet(
-        "Needs a choice"
-    )
-    choice_sheet.hide_gridlines(2)
-    choice_sheet.freeze_panes(3, 0)
-    choice_sheet.set_column("A:A", 12)
-    choice_sheet.set_column("B:B", 15)
-    choice_sheet.set_column("C:C", 17)
-    choice_sheet.set_column("D:D", 25)
-    choice_sheet.set_column("E:E", 48)
+        # Every unresolved shift becomes a completed provisional row.
+        # The top-ranked employee is preselected, but the yellow name
+        # cell contains a dropdown of all ranked eligible alternatives.
+        for draft in draft_rows:
+            open_shift = draft["open_shift"]
+            signature = draft["signature"]
+            ranked = draft["ranked"]
 
-    choice_sheet.merge_range(
-        "A1:E1",
-        "Needs a choice",
-        title_format,
-    )
-    choice_sheet.write(
-        "A2",
-        "Choose an employee from each yellow dropdown. "
-        "Only employees currently eligible for that shift are listed.",
-        note_format,
-    )
+            names = [
+                item["pattern"].employee.full_name
+                for item in ranked
+            ]
 
-    choice_headers = [
-        "Area",
-        "Date",
-        "Shift",
-        "Employee",
-        "Best matches / notes",
-    ]
-    for col, header in enumerate(choice_headers):
-        choice_sheet.write(
-            2,
-            col,
-            header,
-            header_format,
-        )
+            if names:
+                chosen_name = names[0]
 
-    lists_sheet = workbook.add_worksheet("_Lists")
-    lists_sheet.hide()
+                for list_row, name in enumerate(names):
+                    lists_sheet.write(
+                        list_row,
+                        list_col,
+                        name,
+                    )
 
-    choice_row = 3
-    list_col = 0
-
-    for open_shift in roster.open_shifts.all().order_by(
-        "department",
-        "date",
-        "start_time",
-    ):
-        signature = (
-            open_shift.source_signature
-            or open_shift.display_time.replace("–", "-")
-        )
-        ranked = rank_candidates(
-            roster=roster,
-            patterns=patterns,
-            weekday=open_shift.date.weekday(),
-            department=open_shift.department,
-            signature=signature,
-            current_hours=current_hours,
-            current_days=current_days,
-            shift_date=open_shift.date,
-        )
-
-        names = [
-            item["pattern"].employee.full_name
-            for item in ranked
-        ]
-
-        choice_sheet.write(
-            choice_row,
-            0,
-            (
-                "Bar"
-                if open_shift.department == Department.BAR
-                else "Restaurant"
-            ),
-            cell_format,
-        )
-        choice_sheet.write(
-            choice_row,
-            1,
-            open_shift.date.strftime("%a %d %b"),
-            cell_format,
-        )
-        choice_sheet.write(
-            choice_row,
-            2,
-            signature,
-            cell_format,
-        )
-
-        if names:
-            for list_row, name in enumerate(names):
-                lists_sheet.write(
-                    list_row,
-                    list_col,
-                    name,
+                range_name = (
+                    f"DraftChoices_{open_shift.pk}"
+                )
+                column_letter = (
+                    xlsxwriter.utility.xl_col_to_name(
+                        list_col
+                    )
+                )
+                workbook.define_name(
+                    range_name,
+                    (
+                        f"='_Lists'!${column_letter}$1:"
+                        f"${column_letter}${len(names)}"
+                    ),
+                )
+                sheet.write(
+                    row,
+                    0,
+                    chosen_name,
+                    draft_name_format,
+                )
+                sheet.data_validation(
+                    row,
+                    0,
+                    row,
+                    0,
+                    {
+                        "validate": "list",
+                        "source": f"={range_name}",
+                        "input_title": "AI draft choice",
+                        "input_message": (
+                            "Leave this employee or choose "
+                            "another available option."
+                        ),
+                    },
+                )
+                list_col += 1
+            else:
+                sheet.write(
+                    row,
+                    0,
+                    "UNASSIGNED",
+                    draft_name_format,
                 )
 
-            range_name = (
-                f"ShiftChoices_{open_shift.pk}"
+            for day_index, day in enumerate(days, start=1):
+                if day == open_shift.date:
+                    sheet.write(
+                        row,
+                        day_index,
+                        signature,
+                        draft_shift_format,
+                    )
+                else:
+                    sheet.write(
+                        row,
+                        day_index,
+                        "OFF",
+                        cell_format,
+                    )
+
+            sheet.write_number(
+                row,
+                8,
+                round(signature_duration(signature), 1),
+                draft_shift_format,
             )
-            column_letter = xlsxwriter.utility.xl_col_to_name(
-                list_col
-            )
-            workbook.define_name(
-                range_name,
-                (
-                    f"='_Lists'!${column_letter}$1:"
-                    f"${column_letter}${len(names)}"
-                ),
-            )
-            choice_sheet.data_validation(
-                choice_row,
-                3,
-                choice_row,
-                3,
-                {
-                    "validate": "list",
-                    "source": f"={range_name}",
-                    "input_title": "Choose employee",
-                    "input_message": (
-                        "Eligible employees only"
+
+            if names:
+                sheet.write_comment(
+                    row,
+                    0,
+                    (
+                        "AI provisional assignment for "
+                        f"{open_shift.date:%a %d %b} "
+                        f"{signature}. Change the employee "
+                        "with the dropdown if needed."
                     ),
-                },
-            )
-            choice_sheet.write_blank(
-                choice_row,
-                3,
-                None,
-                yellow_format,
-            )
-            top_names = ", ".join(names[:5])
-            choice_sheet.write(
-                choice_row,
-                4,
-                f"Suggested: {top_names}",
-                cell_format,
-            )
-            list_col += 1
-        else:
-            choice_sheet.write(
-                choice_row,
-                3,
-                "No eligible employee",
-                yellow_format,
-            )
-            choice_sheet.write(
-                choice_row,
-                4,
-                "Requires a manager decision",
-                cell_format,
-            )
-
-        choice_row += 1
-
-    if choice_row == 3:
-        choice_sheet.merge_range(
-            "A4:E4",
-            "No unresolved shifts - this roster is fully assigned.",
-            cell_format,
-        )
+                )
+            row += 1
 
     workbook.close()
     output.seek(0)
@@ -746,7 +758,6 @@ def roster_excel(request, pk):
         f'attachment; filename="{filename}"'
     )
     return response
-
 @login_required
 def save_cell(request, pk):
     if request.method != "POST":
