@@ -1,6 +1,17 @@
 # Changelog
 
 
+## 0.20.0
+- Normal-day limits, unusual shift times and target-hour ceilings are now scoring penalties rather than automatic rejection rules
+- True impossibilities such as department mismatch, overlap and six already-worked days remain hard blocks
+- Open shifts should now show the best available compromise instead of "No suitable employee" when somebody can actually work
+- Adds an Excel button to every roster
+- Excel export contains the familiar weekly roster plus a "Needs a choice" sheet
+- Unresolved shifts use native Excel employee dropdowns limited to currently eligible staff
+- Dropdown workbooks require no macros
+
+
+
 ## 0.19.0
 - Generation is now historic-shift-template first rather than minimum-coverage first
 - Learns exact recurring shift times and how many copies normally appear each weekday

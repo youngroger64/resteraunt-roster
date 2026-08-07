@@ -8,6 +8,7 @@ urlpatterns = [
     path("patterns/", views.pattern_list, name="patterns"),
     path("generate-from-patterns/", views.generate_pattern_roster, name="generate_patterns"),
     path("<int:pk>/", views.roster_detail, name="detail"),
+    path("<int:pk>/excel/", views.roster_excel, name="excel"),
     path("<int:pk>/cell/", views.save_cell, name="save_cell"),
     path("<int:pk>/use-suggestion/", views.use_suggestion, name="use_suggestion"),
     path("<int:pk>/open/<int:open_shift_id>/assign/", views.assign_open_shift, name="assign_open_shift"),

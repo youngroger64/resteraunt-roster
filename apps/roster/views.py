@@ -1,8 +1,10 @@
 from datetime import timedelta
+from io import BytesIO
 from django.contrib import messages
+import xlsxwriter
 from django.contrib.auth.decorators import login_required
 from django.db.models import Case, IntegerField, Value, When
-from django.http import HttpResponseBadRequest
+from django.http import HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from apps.employees.models import Department, Employee
 from .forms import GeneratePatternRosterForm, RosterWeekForm
@@ -337,6 +339,413 @@ def roster_detail(request, pk):
             "scheduled_employee_count": len(scheduled_employee_ids),
         },
     )
+
+
+@login_required
+def roster_excel(request, pk):
+    roster = get_object_or_404(RosterWeek, pk=pk)
+    days = [
+        roster.week_start + timedelta(days=index)
+        for index in range(7)
+    ]
+    shifts = list(
+        roster.shifts.select_related("employee").order_by(
+            "department",
+            "employee__first_name",
+            "employee__last_name",
+            "date",
+            "segment",
+        )
+    )
+    patterns = list(
+        EmployeePattern.objects.select_related("employee")
+    )
+
+    shift_map = {}
+    employees_by_department = {
+        Department.RESTAURANT: {},
+        Department.BAR: {},
+    }
+    current_hours = {}
+    current_days = {}
+    employee_days = set()
+
+    for shift in shifts:
+        shift_map.setdefault(
+            (shift.employee_id, shift.date),
+            [],
+        ).append(shift)
+        employees_by_department.setdefault(
+            shift.department,
+            {},
+        )[shift.employee_id] = shift.employee
+
+        hours_key = (
+            shift.employee_id,
+            shift.department,
+        )
+        current_hours[hours_key] = (
+            current_hours.get(hours_key, 0.0)
+            + shift.duration_hours
+        )
+        employee_days.add(
+            (
+                shift.employee_id,
+                shift.department,
+                shift.date,
+            )
+        )
+
+    for employee_id, department, shift_date in employee_days:
+        key = (employee_id, department)
+        current_days[key] = current_days.get(key, 0) + 1
+
+    output = BytesIO()
+    workbook = xlsxwriter.Workbook(
+        output,
+        {"in_memory": True},
+    )
+
+    title_format = workbook.add_format(
+        {
+            "bold": True,
+            "font_size": 16,
+            "align": "left",
+            "valign": "vcenter",
+        }
+    )
+    section_format = workbook.add_format(
+        {
+            "bold": True,
+            "bg_color": "#EAF0FF",
+            "border": 1,
+        }
+    )
+    header_format = workbook.add_format(
+        {
+            "bold": True,
+            "bg_color": "#F5F7FA",
+            "border": 1,
+            "align": "center",
+        }
+    )
+    cell_format = workbook.add_format(
+        {
+            "border": 1,
+            "align": "center",
+            "valign": "vcenter",
+        }
+    )
+    name_format = workbook.add_format(
+        {
+            "border": 1,
+            "bold": True,
+        }
+    )
+    yellow_format = workbook.add_format(
+        {
+            "border": 1,
+            "bg_color": "#FFF2CC",
+        }
+    )
+    note_format = workbook.add_format(
+        {
+            "font_color": "#667085",
+            "italic": True,
+        }
+    )
+
+    sheet = workbook.add_worksheet("Roster")
+    sheet.hide_gridlines(2)
+    sheet.freeze_panes(3, 1)
+    sheet.set_column("A:A", 23)
+    sheet.set_column("B:H", 15)
+    sheet.set_column("I:I", 13)
+
+    sheet.merge_range(
+        "A1:I1",
+        f"Week ending {roster.week_end:%d %B %Y}",
+        title_format,
+    )
+    sheet.write(
+        "A2",
+        "Generated roster - unresolved choices are on the 'Needs a choice' sheet.",
+        note_format,
+    )
+
+    headers = ["Employee"]
+    headers += [
+        f"{day:%a}\n{day:%d %b}"
+        for day in days
+    ]
+    headers.append("Hours")
+
+    row = 2
+    for col, header in enumerate(headers):
+        sheet.write(row, col, header, header_format)
+
+    row += 1
+
+    for department, label in (
+        (Department.RESTAURANT, "Restaurant"),
+        (Department.BAR, "Bar"),
+    ):
+        employees = list(
+            employees_by_department.get(
+                department,
+                {},
+            ).values()
+        )
+        if not employees:
+            continue
+
+        sheet.merge_range(
+            row,
+            0,
+            row,
+            8,
+            label,
+            section_format,
+        )
+        row += 1
+
+        employees.sort(
+            key=lambda employee: (
+                employee.first_name.lower(),
+                employee.last_name.lower(),
+            )
+        )
+
+        for employee in employees:
+            sheet.write(
+                row,
+                0,
+                employee.full_name,
+                name_format,
+            )
+            total_hours = 0.0
+
+            for day_index, day in enumerate(days, start=1):
+                employee_shifts = sorted(
+                    shift_map.get(
+                        (employee.id, day),
+                        [],
+                    ),
+                    key=lambda item: item.segment,
+                )
+
+                if employee_shifts:
+                    value = ", ".join(
+                        (
+                            f"{shift.start_time:%H:%M}-"
+                            f"{shift.end_time:%H:%M}"
+                        )
+                        for shift in employee_shifts
+                    )
+                    total_hours += sum(
+                        shift.duration_hours
+                        for shift in employee_shifts
+                    )
+                else:
+                    value = "OFF"
+
+                sheet.write(
+                    row,
+                    day_index,
+                    value,
+                    cell_format,
+                )
+
+            sheet.write_number(
+                row,
+                8,
+                round(total_hours, 1),
+                cell_format,
+            )
+            row += 1
+
+    choice_sheet = workbook.add_worksheet(
+        "Needs a choice"
+    )
+    choice_sheet.hide_gridlines(2)
+    choice_sheet.freeze_panes(3, 0)
+    choice_sheet.set_column("A:A", 12)
+    choice_sheet.set_column("B:B", 15)
+    choice_sheet.set_column("C:C", 17)
+    choice_sheet.set_column("D:D", 25)
+    choice_sheet.set_column("E:E", 48)
+
+    choice_sheet.merge_range(
+        "A1:E1",
+        "Needs a choice",
+        title_format,
+    )
+    choice_sheet.write(
+        "A2",
+        "Choose an employee from each yellow dropdown. "
+        "Only employees currently eligible for that shift are listed.",
+        note_format,
+    )
+
+    choice_headers = [
+        "Area",
+        "Date",
+        "Shift",
+        "Employee",
+        "Best matches / notes",
+    ]
+    for col, header in enumerate(choice_headers):
+        choice_sheet.write(
+            2,
+            col,
+            header,
+            header_format,
+        )
+
+    lists_sheet = workbook.add_worksheet("_Lists")
+    lists_sheet.hide()
+
+    choice_row = 3
+    list_col = 0
+
+    for open_shift in roster.open_shifts.all().order_by(
+        "department",
+        "date",
+        "start_time",
+    ):
+        signature = (
+            open_shift.source_signature
+            or open_shift.display_time.replace("–", "-")
+        )
+        ranked = rank_candidates(
+            roster=roster,
+            patterns=patterns,
+            weekday=open_shift.date.weekday(),
+            department=open_shift.department,
+            signature=signature,
+            current_hours=current_hours,
+            current_days=current_days,
+            shift_date=open_shift.date,
+        )
+
+        names = [
+            item["pattern"].employee.full_name
+            for item in ranked
+        ]
+
+        choice_sheet.write(
+            choice_row,
+            0,
+            (
+                "Bar"
+                if open_shift.department == Department.BAR
+                else "Restaurant"
+            ),
+            cell_format,
+        )
+        choice_sheet.write(
+            choice_row,
+            1,
+            open_shift.date.strftime("%a %d %b"),
+            cell_format,
+        )
+        choice_sheet.write(
+            choice_row,
+            2,
+            signature,
+            cell_format,
+        )
+
+        if names:
+            for list_row, name in enumerate(names):
+                lists_sheet.write(
+                    list_row,
+                    list_col,
+                    name,
+                )
+
+            range_name = (
+                f"ShiftChoices_{open_shift.pk}"
+            )
+            column_letter = xlsxwriter.utility.xl_col_to_name(
+                list_col
+            )
+            workbook.define_name(
+                range_name,
+                (
+                    f"='_Lists'!${column_letter}$1:"
+                    f"${column_letter}${len(names)}"
+                ),
+            )
+            choice_sheet.data_validation(
+                choice_row,
+                3,
+                choice_row,
+                3,
+                {
+                    "validate": "list",
+                    "source": f"={range_name}",
+                    "input_title": "Choose employee",
+                    "input_message": (
+                        "Eligible employees only"
+                    ),
+                },
+            )
+            choice_sheet.write_blank(
+                choice_row,
+                3,
+                None,
+                yellow_format,
+            )
+            top_names = ", ".join(names[:5])
+            choice_sheet.write(
+                choice_row,
+                4,
+                f"Suggested: {top_names}",
+                cell_format,
+            )
+            list_col += 1
+        else:
+            choice_sheet.write(
+                choice_row,
+                3,
+                "No eligible employee",
+                yellow_format,
+            )
+            choice_sheet.write(
+                choice_row,
+                4,
+                "Requires a manager decision",
+                cell_format,
+            )
+
+        choice_row += 1
+
+    if choice_row == 3:
+        choice_sheet.merge_range(
+            "A4:E4",
+            "No unresolved shifts - this roster is fully assigned.",
+            cell_format,
+        )
+
+    workbook.close()
+    output.seek(0)
+
+    filename = (
+        f"roster-week-ending-"
+        f"{roster.week_end:%Y-%m-%d}.xlsx"
+    )
+    response = HttpResponse(
+        output.getvalue(),
+        content_type=(
+            "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet"
+        ),
+    )
+    response["Content-Disposition"] = (
+        f'attachment; filename="{filename}"'
+    )
+    return response
 
 @login_required
 def save_cell(request, pk):

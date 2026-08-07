@@ -346,18 +346,12 @@ def score_candidate(
         else 1.0
     )
 
+    # Six days remains a hard safety limit for automatic generation.
     if current_days >= 6:
         return -999
 
-    if (
-        current_days >= target_days(pattern)
-        and completion >= 0.75
-    ):
-        return -999
-
     proposed_hours = signature_duration(signature)
-    if current_hours + proposed_hours > automatic_hour_ceiling(pattern, department):
-        return -999
+    projected_hours = current_hours + proposed_hours
 
     key = DAY_KEYS[weekday]
     probability = int(pattern.day_probabilities.get(key, 0))
@@ -373,12 +367,11 @@ def score_candidate(
         ("evening", "morning"),
         ("late", "morning"),
     }
-    if (
+    unusual_time = (
         typical_band != "unknown"
         and (typical_band, proposed_band) in incompatible
         and typical_confidence >= 50
-    ):
-        return -999
+    )
 
     if availability and availability.get("possible_split"):
         if not has_historic_split_pattern(pattern, weekday, signature):
@@ -392,15 +385,34 @@ def score_candidate(
     elif typical_signature != "OFF":
         score += 15 if typical_band == proposed_band else -25
 
-    hour_score = hours_target_score(
+    # Normal days, time-of-day and target ceilings are preferences,
+    # not reasons to leave a real shift empty.
+    if (
+        current_days >= target_days(pattern)
+        and completion >= 0.75
+    ):
+        score -= 45
+
+    if unusual_time:
+        score -= 55
+
+    ceiling = automatic_hour_ceiling(
         pattern,
-        current_hours,
-        proposed_hours,
         department,
     )
-    if hour_score <= -999:
-        return -999
-    score += hour_score
+    if projected_hours > ceiling:
+        score -= 35 + round(
+            (projected_hours - ceiling) * 6
+        )
+    else:
+        hour_score = hours_target_score(
+            pattern,
+            current_hours,
+            proposed_hours,
+            department,
+        )
+        if hour_score > -999:
+            score += hour_score
 
     if target_days(pattern) - current_days == 1:
         score += 8
@@ -446,6 +458,16 @@ def candidate_reasons(
         reasons.append("Available for this shift")
     elif has_historic_split_pattern(pattern, weekday, signature):
         reasons.append("Historically works this split pattern")
+
+    if current_days >= target_days(pattern):
+        reasons.append("Would exceed normal working days")
+
+    proposed_hours = signature_duration(signature)
+    if (
+        current_hours + proposed_hours
+        > automatic_hour_ceiling(pattern, department)
+    ):
+        reasons.append("Would exceed normal weekly hours")
 
     if float(pattern.average_days_worked) < 1:
         reasons.append("Rare worker — reserve option")
