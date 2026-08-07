@@ -13,6 +13,7 @@ from apps.roster.models import (
     StaffingPattern,
     CoveragePattern,
     DailyStaffingPattern,
+    ShiftTemplatePattern,
 )
 
 DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
@@ -185,6 +186,7 @@ def target_days(pattern):
 
 
 
+
 def target_hours(pattern, department=None):
     total_target = max(
         0.0,
@@ -218,7 +220,11 @@ def target_hours(pattern, department=None):
         )
         if department is None:
             return total_target
-        return total_target if department == normal_department else 0.0
+        return (
+            total_target
+            if department == normal_department
+            else 0.0
+        )
 
     if department == Department.BAR:
         return bar_target
@@ -229,14 +235,23 @@ def target_hours(pattern, department=None):
 
 def automatic_department_eligible(pattern, department):
     employee = pattern.employee
+
     if not compatible(employee, department):
         return False
 
     restaurant_target = float(
-        getattr(pattern, "restaurant_target_hours", 0) or 0
+        getattr(
+            pattern,
+            "restaurant_target_hours",
+            0,
+        ) or 0
     )
     bar_target = float(
-        getattr(pattern, "bar_target_hours", 0) or 0
+        getattr(
+            pattern,
+            "bar_target_hours",
+            0,
+        ) or 0
     )
 
     if restaurant_target <= 0 and bar_target <= 0:
@@ -255,7 +270,8 @@ def automatic_department_eligible(pattern, department):
 
     return (
         employee.department == Department.RESTAURANT
-        or pattern.normal_department == Department.RESTAURANT
+        or pattern.normal_department
+        == Department.RESTAURANT
         or restaurant_target > 0
     )
 
@@ -320,7 +336,23 @@ def score_candidate(
     employee = pattern.employee
     if not automatic_department_eligible(pattern, department):
         return -999
-    if current_days >= target_days(pattern):
+    average_hours = target_hours(
+        pattern,
+        department,
+    )
+    completion = (
+        current_hours / average_hours
+        if average_hours >= 8
+        else 1.0
+    )
+
+    if current_days >= 6:
+        return -999
+
+    if (
+        current_days >= target_days(pattern)
+        and completion >= 0.75
+    ):
         return -999
 
     proposed_hours = signature_duration(signature)
@@ -473,15 +505,25 @@ def rank_candidates(
             }
         )
 
+
     ranked.sort(
         key=lambda item: (
-            item["score"],
             -effective_priority_ratio(
                 item["pattern"],
-                current_hours.get((item["pattern"].employee_id, department), 0.0),
+                current_hours.get(
+                    (
+                        item["pattern"].employee_id,
+                        department,
+                    ),
+                    0.0,
+                ),
                 department,
             ),
-            target_hours(item["pattern"], department),
+            target_hours(
+                item["pattern"],
+                department,
+            ),
+            item["score"],
         ),
         reverse=True,
     )
@@ -504,6 +546,242 @@ def signature_slots(signature):
             )
         )
     return slots
+
+
+
+def plausible_generated_signature(signature):
+    parsed = parse_signature(signature)
+    if not parsed:
+        return False
+
+    durations = []
+    for _segment, start, end in parsed:
+        start_dt = datetime.combine(
+            datetime.today(),
+            start,
+        )
+        end_dt = datetime.combine(
+            datetime.today(),
+            end,
+        )
+        if end_dt <= start_dt:
+            end_dt += timedelta(days=1)
+
+        duration = (
+            end_dt - start_dt
+        ).total_seconds() / 3600
+        durations.append(duration)
+
+    if any(duration > 12 for duration in durations):
+        return False
+
+    return sum(durations) <= 13
+
+
+def planned_people_count(
+    roster,
+    shift_date,
+    department,
+):
+    assigned = (
+        roster.shifts.filter(
+            date=shift_date,
+            department=department,
+        )
+        .values("employee_id")
+        .distinct()
+        .count()
+    )
+    open_count = roster.open_shifts.filter(
+        date=shift_date,
+        department=department,
+    ).count()
+    return assigned + open_count
+
+
+def open_shift_already_exists(
+    roster,
+    shift_date,
+    department,
+    signature,
+):
+    return roster.open_shifts.filter(
+        date=shift_date,
+        department=department,
+        source_signature=signature,
+    ).exists()
+
+
+def template_blueprint(weekday, department):
+    daily = DailyStaffingPattern.objects.filter(
+        weekday=weekday,
+        department=department,
+        confidence__gte=25,
+    ).first()
+
+    target_count = (
+        daily.typical_headcount
+        if daily else 0
+    )
+
+    templates = list(
+        ShiftTemplatePattern.objects.filter(
+            weekday=weekday,
+            department=department,
+            confidence__gte=40,
+            typical_count__gt=0,
+        ).order_by(
+            "-confidence",
+            "-typical_count",
+            "shift_signature",
+        )
+    )
+
+    slots = []
+    for template in templates:
+        if not plausible_generated_signature(
+            template.shift_signature
+        ):
+            continue
+
+        for _copy in range(template.typical_count):
+            slots.append(
+                (
+                    template.shift_signature,
+                    template.confidence,
+                )
+            )
+
+    # If exact historical signatures add up to more than the learned
+    # normal headcount, retain the strongest recurring shifts only.
+    if target_count and len(slots) > target_count:
+        slots = slots[:target_count]
+
+    # If history has headcount but exact signatures were too varied,
+    # fill remaining template places using the strongest staffing patterns.
+    if target_count and len(slots) < target_count:
+        fallback = [
+            pattern
+            for pattern in StaffingPattern.objects.filter(
+                weekday=weekday,
+                department=department,
+                confidence__gte=25,
+            ).order_by(
+                "-confidence",
+                "-average_required",
+            )
+            if plausible_generated_signature(
+                pattern.shift_signature
+            )
+        ]
+
+        index = 0
+        while fallback and len(slots) < target_count:
+            pattern = fallback[index % len(fallback)]
+            slots.append(
+                (
+                    pattern.shift_signature,
+                    pattern.confidence,
+                )
+            )
+            index += 1
+
+    return target_count, slots
+
+
+def rebuild_planned_coverage(roster):
+    planned = {}
+
+    for shift in roster.shifts.all():
+        weekday = shift.date.weekday()
+        signature = (
+            f"{shift.start_time.strftime('%H:%M')}-"
+            f"{shift.end_time.strftime('%H:%M')}"
+        )
+        add_planned_coverage(
+            weekday,
+            shift.department,
+            signature,
+            planned,
+        )
+
+    for open_shift in roster.open_shifts.all():
+        signature = (
+            open_shift.source_signature
+            or open_shift.display_time.replace("–", "-")
+        )
+        add_planned_coverage(
+            open_shift.date.weekday(),
+            open_shift.department,
+            signature,
+            planned,
+        )
+
+    return planned
+
+
+def generate_historic_templates(
+    roster,
+    patterns,
+    current_hours,
+    current_days,
+    uncertain_threshold,
+):
+    created = 0
+    open_count = 0
+    suggestions = []
+
+    for weekday in range(7):
+        for department in (
+            Department.RESTAURANT,
+            Department.BAR,
+        ):
+            target_count, slots = template_blueprint(
+                weekday,
+                department,
+            )
+            if not slots:
+                continue
+
+            shift_date = (
+                roster.week_start
+                + timedelta(days=weekday)
+            )
+
+            for signature, _confidence in slots:
+                if (
+                    target_count
+                    and planned_people_count(
+                        roster,
+                        shift_date,
+                        department,
+                    ) >= target_count
+                ):
+                    break
+
+                if not plausible_generated_signature(
+                    signature
+                ):
+                    continue
+
+                result = create_assignment_or_open(
+                    roster=roster,
+                    patterns=patterns,
+                    weekday=weekday,
+                    department=department,
+                    signature=signature,
+                    shift_date=shift_date,
+                    current_hours=current_hours,
+                    current_days=current_days,
+                    uncertain_threshold=uncertain_threshold,
+                )
+
+                new_created, new_open, new_suggestions = result
+                created += new_created
+                open_count += new_open
+                suggestions.extend(new_suggestions)
+
+    return created, open_count, suggestions
 
 
 def learned_coverage_requirements():
@@ -631,6 +909,9 @@ def create_assignment_or_open(
     current_days,
     uncertain_threshold,
 ):
+    if not plausible_generated_signature(signature):
+        return 0, 0, []
+
     ranked = rank_candidates(
         roster=roster,
         patterns=patterns,
@@ -742,7 +1023,7 @@ def fill_daily_staffing_gaps(
             daily.typical_headcount,
         )
 
-        current_count = daily_headcount(
+        current_count = planned_people_count(
             roster,
             shift_date,
             daily.department,
@@ -778,7 +1059,7 @@ def fill_daily_staffing_gaps(
             desired_bands.append("any")
 
         for band in desired_bands:
-            if daily_headcount(
+            if planned_people_count(
                 roster,
                 shift_date,
                 daily.department,
@@ -1089,8 +1370,25 @@ def generate_business_roster(target: RosterWeek, uncertain_threshold=75):
     open_count = 0
     suggestions = []
 
+    # First reproduce what a normal historic day actually looks like.
+    (
+        template_created,
+        template_open,
+        template_suggestions,
+    ) = generate_historic_templates(
+        roster=target,
+        patterns=patterns,
+        current_hours=current_hours,
+        current_days=current_days,
+        uncertain_threshold=uncertain_threshold,
+    )
+    created += template_created
+    open_count += template_open
+    suggestions.extend(template_suggestions)
+
+    # Then use 30-minute demand only as a safety net for genuine coverage gaps.
     coverage_requirements = learned_coverage_requirements()
-    planned_coverage = {}
+    planned_coverage = rebuild_planned_coverage(target)
 
     staffing_patterns = StaffingPattern.objects.filter(
         confidence__gte=25,
@@ -1098,10 +1396,35 @@ def generate_business_roster(target: RosterWeek, uncertain_threshold=75):
     ).order_by("weekday", "department", "shift_signature")
 
     for staffing in staffing_patterns:
+        if not plausible_generated_signature(
+            staffing.shift_signature
+        ):
+            continue
+
         required = max(1, round(float(staffing.average_required)))
         shift_date = target.week_start + timedelta(days=staffing.weekday)
 
+        daily = DailyStaffingPattern.objects.filter(
+            weekday=staffing.weekday,
+            department=staffing.department,
+        ).first()
+        normal_headcount = (
+            daily.typical_headcount
+            if daily else 0
+        )
+
         for _slot_number in range(required):
+            # Coverage can add one safety shift above the historic normal,
+            # but should not turn a normal 8-person Saturday into 11 people.
+            if (
+                normal_headcount
+                and planned_people_count(
+                    target,
+                    shift_date,
+                    staffing.department,
+                ) >= normal_headcount + 1
+            ):
+                continue
             if not has_coverage_deficit(
                 weekday=staffing.weekday,
                 department=staffing.department,

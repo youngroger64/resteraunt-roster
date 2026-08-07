@@ -10,6 +10,7 @@ from apps.roster.models import (
     StaffingPattern,
     CoveragePattern,
     DailyStaffingPattern,
+    ShiftTemplatePattern,
     PayrollRecord,
 )
 
@@ -61,6 +62,22 @@ def _signature_band(shifts):
     return "late"
 
 
+
+def _plausible_shift_group(shifts):
+    if not shifts:
+        return False
+
+    # Bad imports such as 09:00-01:00 create a 16-hour single shift.
+    # Do not let one malformed historic cell become a weekly template.
+    if any(shift.duration_hours > 12 for shift in shifts):
+        return False
+
+    total_hours = sum(
+        shift.duration_hours for shift in shifts
+    )
+    return total_hours <= 13
+
+
 @transaction.atomic
 def learn_patterns():
 
@@ -77,6 +94,7 @@ def learn_patterns():
     StaffingPattern.objects.all().delete()
     CoveragePattern.objects.all().delete()
     DailyStaffingPattern.objects.all().delete()
+    ShiftTemplatePattern.objects.all().delete()
 
     # Employee patterns
     for employee in Employee.objects.filter(is_active=True):
@@ -184,35 +202,104 @@ def learn_patterns():
         )
         employee_results.append(pattern)
 
-    # Business staffing patterns
+
+    # Business shift templates.
+    #
+    # The exact shifts a manager repeatedly writes are more useful than
+    # minimum slot coverage alone. We therefore learn both:
+    #   1. StaffingPattern for backwards compatibility / coverage fallback.
+    #   2. ShiftTemplatePattern for the normal daily roster blueprint.
     slot_counts = defaultdict(Counter)
+
     for week_id in historic_weeks:
         grouped = defaultdict(list)
-        for shift in Shift.objects.filter(roster_week_id=week_id):
-            grouped[(shift.date.weekday(), shift.department, shift.employee_id)].append(shift)
+
+        for shift in Shift.objects.filter(
+            roster_week_id=week_id
+        ):
+            grouped[
+                (
+                    shift.date.weekday(),
+                    shift.department,
+                    shift.employee_id,
+                )
+            ].append(shift)
 
         per_week_slots = Counter()
-        for (weekday, department, _employee_id), day_shifts in grouped.items():
+
+        for (
+            weekday,
+            department,
+            _employee_id,
+        ), day_shifts in grouped.items():
+            if not _plausible_shift_group(day_shifts):
+                continue
+
             signature = shift_signature(day_shifts)
-            per_week_slots[(weekday, department, signature)] += 1
+            per_week_slots[
+                (
+                    weekday,
+                    department,
+                    signature,
+                )
+            ] += 1
 
         for key, count in per_week_slots.items():
             slot_counts[key][week_id] = count
 
-    for (weekday, department, signature), counts_by_week in slot_counts.items():
-        counts = [counts_by_week.get(week_id, 0) for week_id in historic_weeks]
-        average_required = sum(counts) / week_count if week_count else 0
-        weeks_present = sum(1 for count in counts if count > 0)
-        confidence = round((weeks_present / week_count) * 100) if week_count else 0
+    for (
+        weekday,
+        department,
+        signature,
+    ), counts_by_week in slot_counts.items():
+        counts = [
+            counts_by_week.get(week_id, 0)
+            for week_id in historic_weeks
+        ]
+        positive_counts = [
+            value for value in counts if value > 0
+        ]
+        if not positive_counts:
+            continue
+
+        weeks_present = len(positive_counts)
+        confidence = (
+            round(
+                (weeks_present / week_count) * 100
+            )
+            if week_count else 0
+        )
+
+        # Existing pattern remains useful for fallback coverage.
+        average_required = (
+            sum(counts) / week_count
+            if week_count else 0
+        )
         StaffingPattern.objects.create(
             weekday=weekday,
             department=department,
             shift_signature=signature,
-            average_required=Decimal(str(round(average_required, 2))),
+            average_required=Decimal(
+                str(round(average_required, 2))
+            ),
             weeks_seen=week_count,
             confidence=confidence,
         )
 
+        # Exact day blueprint: when the shift exists, how many copies
+        # are normally on the roster?
+        typical_count = max(
+            1,
+            round(_median(positive_counts)),
+        )
+        ShiftTemplatePattern.objects.create(
+            weekday=weekday,
+            department=department,
+            shift_signature=signature,
+            typical_count=typical_count,
+            weeks_seen=week_count,
+            confidence=confidence,
+        )
 
 
     # Daily staffing demand: distinct workers and shift-band mix.
@@ -335,5 +422,6 @@ def learn_patterns():
         "staffing_patterns": StaffingPattern.objects.count(),
         "coverage_patterns": CoveragePattern.objects.count(),
         "daily_staffing_patterns": DailyStaffingPattern.objects.count(),
+        "shift_templates": ShiftTemplatePattern.objects.count(),
         "historic_weeks": week_count,
     }

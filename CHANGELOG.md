@@ -1,6 +1,21 @@
 # Changelog
 
 
+## 0.19.0
+- Generation is now historic-shift-template first rather than minimum-coverage first
+- Learns exact recurring shift times and how many copies normally appear each weekday
+- Daily historic headcount determines how many roster places are created
+- Payroll/area-hour shortfall is the primary employee assignment priority
+- 30-minute coverage is retained as a safety check after the normal day template is built
+- Rejects implausible single shifts longer than 12 hours from automatic templates
+- Counts manager-choice open shifts toward daily headcount so fallback passes do not create accidental extras
+- Daily headcount treats manager-choice open shifts as already planned
+- Learning page now shows roster weeks, payroll weeks and payroll record counts separately
+- Fixes the DailyStaffingPattern admin import
+- Adds shift-template learning and generation tests
+
+
+
 ## 0.18.0
 - Learns distinct employee headcount for every weekday and department
 - Learns the normal morning, day, short, evening and late shift mix

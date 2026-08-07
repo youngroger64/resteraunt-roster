@@ -142,6 +142,43 @@ class OpenShift(TimeStampedModel):
 
 
 
+
+class ShiftTemplatePattern(TimeStampedModel):
+    weekday = models.PositiveSmallIntegerField()
+    department = models.CharField(
+        max_length=20,
+        choices=Department.choices,
+    )
+    shift_signature = models.CharField(max_length=120)
+    typical_count = models.PositiveSmallIntegerField(default=1)
+    weeks_seen = models.PositiveSmallIntegerField(default=0)
+    confidence = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = [
+            "weekday",
+            "department",
+            "-confidence",
+            "shift_signature",
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "weekday",
+                    "department",
+                    "shift_signature",
+                ],
+                name="unique_shift_template_pattern",
+            )
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.get_department_display()} day {self.weekday}: "
+            f"{self.shift_signature} x{self.typical_count}"
+        )
+
+
 class DailyStaffingPattern(TimeStampedModel):
     weekday = models.PositiveSmallIntegerField()
     department = models.CharField(

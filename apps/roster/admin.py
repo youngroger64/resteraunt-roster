@@ -1,5 +1,15 @@
 from django.contrib import admin
-from .models import CoveragePattern, OpenShift, PayrollRecord, PayrollWeek, RosterWeek, Shift, StaffingPattern
+from .models import (
+    CoveragePattern,
+    DailyStaffingPattern,
+    OpenShift,
+    PayrollRecord,
+    PayrollWeek,
+    RosterWeek,
+    Shift,
+    ShiftTemplatePattern,
+    StaffingPattern,
+)
 
 class ShiftInline(admin.TabularInline):
     model = Shift
@@ -54,6 +64,19 @@ class DailyStaffingPatternAdmin(admin.ModelAdmin):
         "department",
         "typical_headcount",
         "minimum_headcount",
+        "confidence",
+    )
+    list_filter = ("weekday", "department")
+
+
+
+@admin.register(ShiftTemplatePattern)
+class ShiftTemplatePatternAdmin(admin.ModelAdmin):
+    list_display = (
+        "weekday",
+        "department",
+        "shift_signature",
+        "typical_count",
         "confidence",
     )
     list_filter = ("weekday", "department")

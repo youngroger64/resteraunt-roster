@@ -1,13 +1,38 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-header"><div><h1>Learn patterns</h1><p class="muted">{{ historic_count }} historic week{{ historic_count|pluralize }} available.</p></div></div>
+<div class="page-header">
+  <div>
+    <h1>Learn patterns</h1>
+    <p class="muted">
+      {{ historic_count }} historic roster week{{ historic_count|pluralize }}
+      · {{ payroll_week_count }} payroll week{{ payroll_week_count|pluralize }}
+      · {{ payroll_record_count }} payroll records
+    </p>
+  </div>
+</div>
+
 <div class="card form-card">
 {% if historic_count < 2 %}
-  <p>Not enough evidence yet.</p>
-  <div class="actions"><a class="btn primary" href="{% url 'imports:roster' %}">Import another roster</a><a class="btn" href="{% url 'roster:list' %}">Continue without learning</a></div>
+  <p>Not enough roster evidence yet.</p>
+  <div class="actions">
+    <a class="btn primary" href="{% url 'imports:roster' %}">
+      Import another roster
+    </a>
+    <a class="btn" href="{% url 'roster:list' %}">
+      Continue without learning
+    </a>
+  </div>
 {% else %}
-  <p>The app will calculate normal days, common shifts, hours and consistency. Nothing changes automatically.</p>
-  <form method="post">{% csrf_token %}<button class="btn primary">Learn from {{ historic_count }} weeks</button></form>
+  <p>
+    The app learns the normal number of people and recurring shift times
+    for each day, then uses payroll history to balance who receives them.
+  </p>
+  <form method="post">
+    {% csrf_token %}
+    <button class="btn primary">
+      Learn from {{ historic_count }} rosters + {{ payroll_week_count }} payroll weeks
+    </button>
+  </form>
 {% endif %}
 </div>
 {% endblock %}

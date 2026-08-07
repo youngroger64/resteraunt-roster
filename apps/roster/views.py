@@ -6,7 +6,17 @@ from django.http import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from apps.employees.models import Department, Employee
 from .forms import GeneratePatternRosterForm, RosterWeekForm
-from .models import EmployeePattern, OpenShift, RosterPurpose, RosterStatus, RosterWeek, Shift, StaffingPattern
+from .models import (
+    EmployeePattern,
+    OpenShift,
+    PayrollRecord,
+    PayrollWeek,
+    RosterPurpose,
+    RosterStatus,
+    RosterWeek,
+    Shift,
+    StaffingPattern,
+)
 from .services.generator import candidate_availability, copy_roster, generate_business_roster, parse_signature, rank_candidates
 from .services.learner import learn_patterns
 from .services.publisher import publish_roster
@@ -28,15 +38,36 @@ def roster_create(request):
         return redirect("roster:detail", pk=roster.pk)
     return render(request, "roster/create.html", {"form":form,"latest":latest})
 
+
 @login_required
 def learn(request):
-    historic_count = RosterWeek.objects.filter(purpose=RosterPurpose.HISTORIC).count()
+    historic_count = RosterWeek.objects.filter(
+        purpose=RosterPurpose.HISTORIC
+    ).count()
+    payroll_week_count = PayrollWeek.objects.count()
+    payroll_record_count = PayrollRecord.objects.count()
+
     if request.method == "POST":
         result = learn_patterns()
-        messages.success(request, f"Learned {len(result['employees'])} employees and {result['staffing_patterns']} business staffing patterns.")
+        messages.success(
+            request,
+            (
+                f"Learned {len(result['employees'])} employees, "
+                f"{result['shift_templates']} recurring shift templates "
+                f"and {result['staffing_patterns']} fallback staffing patterns."
+            ),
+        )
         return redirect("roster:patterns")
-    return render(request, "roster/learn.html", {"historic_count":historic_count})
 
+    return render(
+        request,
+        "roster/learn.html",
+        {
+            "historic_count": historic_count,
+            "payroll_week_count": payroll_week_count,
+            "payroll_record_count": payroll_record_count,
+        },
+    )
 @login_required
 def pattern_list(request):
     return render(request, "roster/patterns.html", {
