@@ -1,4 +1,4 @@
-from datetime import date, time
+from datetime import date, time, timedelta
 
 from django.test import TestCase
 
@@ -31,16 +31,13 @@ class ShiftTemplateLearningTests(TestCase):
 
         for week_index in range(4):
             roster = RosterWeek.objects.create(
-                week_start=date(
-                    2026,
-                    6,
-                    22 + week_index * 7,
+                week_start=(
+                    date(2026, 6, 22)
+                    + timedelta(days=week_index * 7)
                 ),
                 purpose=RosterPurpose.HISTORIC,
             )
-            saturday = roster.week_start.replace(
-                day=roster.week_start.day + 5
-            )
+            saturday = roster.week_start + timedelta(days=5)
 
             for employee in employees[:4]:
                 Shift.objects.create(
@@ -84,7 +81,7 @@ class ShiftTemplateLearningTests(TestCase):
 
 
 class TemplateFirstGenerationTests(TestCase):
-    def _pattern(self, index):
+    def _pattern(self, index, signature):
         employee = Employee.objects.create(
             first_name=f"Person{index}",
             department=Department.RESTAURANT,
@@ -99,15 +96,17 @@ class TemplateFirstGenerationTests(TestCase):
             day_probabilities={"sat": 100},
             typical_shifts={
                 "sat": {
-                    "shift": "10:00-17:00",
+                    "shift": signature,
                     "confidence": 100,
                 },
             },
         )
 
     def test_generator_recreates_eight_person_saturday(self):
-        for index in range(8):
-            self._pattern(index)
+        for index in range(4):
+            self._pattern(index, "10:00-17:00")
+        for index in range(4, 8):
+            self._pattern(index, "18:00-22:30")
 
         DailyStaffingPattern.objects.create(
             weekday=5,

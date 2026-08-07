@@ -324,6 +324,29 @@ def automatic_hour_ceiling(pattern, department):
     return average + 2.5
 
 
+
+def automatic_assignment_safe(
+    pattern,
+    department,
+    signature,
+    current_hours,
+    current_days,
+):
+    # Manager suggestions may include compromises, but automatic
+    # generation should not push somebody beyond learned day/hour limits.
+    if current_days >= target_days(pattern):
+        return False
+
+    proposed_hours = signature_duration(signature)
+    if (
+        current_hours + proposed_hours
+        > automatic_hour_ceiling(pattern, department)
+    ):
+        return False
+
+    return True
+
+
 def score_candidate(
     pattern,
     weekday,
@@ -945,9 +968,27 @@ def create_assignment_or_open(
         shift_date=shift_date,
     )
 
-    if ranked:
-        best_score = ranked[0]["score"]
-        best_pattern = ranked[0]["pattern"]
+    safe_ranked = [
+        item
+        for item in ranked
+        if automatic_assignment_safe(
+            item["pattern"],
+            department,
+            signature,
+            current_hours.get(
+                (item["pattern"].employee_id, department),
+                0.0,
+            ),
+            current_days.get(
+                (item["pattern"].employee_id, department),
+                0,
+            ),
+        )
+    ]
+
+    if safe_ranked:
+        best_score = safe_ranked[0]["score"]
+        best_pattern = safe_ranked[0]["pattern"]
     else:
         best_score, best_pattern = -999, None
 
@@ -1467,9 +1508,27 @@ def generate_business_roster(target: RosterWeek, uncertain_threshold=75):
                 shift_date=shift_date,
             )
 
-            if ranked:
-                best_score = ranked[0]["score"]
-                best_pattern = ranked[0]["pattern"]
+            safe_ranked = [
+                item
+                for item in ranked
+                if automatic_assignment_safe(
+                    item["pattern"],
+                    staffing.department,
+                    staffing.shift_signature,
+                    current_hours.get(
+                        (item["pattern"].employee_id, staffing.department),
+                        0.0,
+                    ),
+                    current_days.get(
+                        (item["pattern"].employee_id, staffing.department),
+                        0,
+                    ),
+                )
+            ]
+
+            if safe_ranked:
+                best_score = safe_ranked[0]["score"]
+                best_pattern = safe_ranked[0]["pattern"]
             else:
                 best_score, best_pattern = -999, None
 

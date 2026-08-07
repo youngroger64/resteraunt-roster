@@ -17,6 +17,17 @@
     <button class="btn" onclick="window.print()">Print</button>
     <a class="btn" href="{% url 'roster:excel' roster.pk %}">Excel</a>
 
+{% if roster.status == "draft" %}
+<form method="post"
+      action="{% url 'roster:excel_import' roster.pk %}"
+      enctype="multipart/form-data"
+      class="excel-import-form">
+  {% csrf_token %}
+  <input type="file" name="workbook" accept=".xlsx" required>
+  <button class="btn">Import Excel</button>
+</form>
+{% endif %}
+
     {% if roster.status == "draft" and roster.purpose == "weekly" %}
       <form method="post"
             action="{% url 'roster:regenerate' roster.pk %}"

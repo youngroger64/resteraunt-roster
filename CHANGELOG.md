@@ -1,6 +1,18 @@
 # Changelog
 
 
+## 0.22.0
+- Introduces the Manager Workbook workflow
+- One row per employee: provisional AI assignments are merged into the employee's existing weekly row
+- Adds a simple Replace with dropdown beside every scheduled employee
+- Removes duplicate provisional employee rows and the separate choice sheet
+- Manager can edit shift cells directly in Excel and upload the workbook back into the roster
+- Import replaces the draft roster with the workbook and clears resolved open shifts
+- Workbook includes hidden roster metadata so the wrong week's workbook cannot be imported accidentally
+- Bakes in the v0.21 VM hotfixes: signature_duration import, automatic day/hour safety limits, and shift-template date test correction
+
+
+
 ## 0.21.0
 - Excel export is now a complete provisional roster
 - Removed the separate "Needs a choice" worksheet

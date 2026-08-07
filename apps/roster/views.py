@@ -2,7 +2,9 @@ from datetime import timedelta
 from io import BytesIO
 from django.contrib import messages
 import xlsxwriter
+from openpyxl import load_workbook
 from django.contrib.auth.decorators import login_required
+from django.db import transaction
 from django.db.models import Case, IntegerField, Value, When
 from django.http import HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
@@ -19,7 +21,14 @@ from .models import (
     Shift,
     StaffingPattern,
 )
-from .services.generator import candidate_availability, copy_roster, generate_business_roster, parse_signature, rank_candidates
+from .services.generator import (
+    candidate_availability,
+    copy_roster,
+    generate_business_roster,
+    parse_signature,
+    rank_candidates,
+    signature_duration,
+)
 from .services.learner import learn_patterns
 from .services.publisher import publish_roster
 
@@ -342,6 +351,7 @@ def roster_detail(request, pk):
 
 
 
+
 @login_required
 def roster_excel(request, pk):
     roster = get_object_or_404(RosterWeek, pk=pk)
@@ -362,50 +372,41 @@ def roster_excel(request, pk):
         EmployeePattern.objects.select_related("employee")
     )
 
+    # Existing roster, keyed by employee/day.
     shift_map = {}
-    employees_by_department = {
-        Department.RESTAURANT: {},
-        Department.BAR: {},
-    }
     current_hours = {}
     current_days = {}
     employee_days = set()
+    scheduled_ids = set()
+    department_hours = {}
 
     for shift in shifts:
         shift_map.setdefault(
             (shift.employee_id, shift.date),
             [],
         ).append(shift)
-        employees_by_department.setdefault(
-            shift.department,
-            {},
-        )[shift.employee_id] = shift.employee
-
-        key = (
-            shift.employee_id,
-            shift.department,
+        scheduled_ids.add(shift.employee_id)
+        key = (shift.employee_id, shift.department)
+        department_hours[key] = (
+            department_hours.get(key, 0.0)
+            + shift.duration_hours
         )
         current_hours[key] = (
             current_hours.get(key, 0.0)
             + shift.duration_hours
         )
         employee_days.add(
-            (
-                shift.employee_id,
-                shift.department,
-                shift.date,
-            )
+            (shift.employee_id, shift.department, shift.date)
         )
 
     for employee_id, department, shift_date in employee_days:
         key = (employee_id, department)
         current_days[key] = current_days.get(key, 0) + 1
 
-    # Pre-calculate a best available draft choice for every unresolved shift.
-    open_drafts = {
-        Department.RESTAURANT: [],
-        Department.BAR: [],
-    }
+    # Provisional assignments live only in the workbook until import.
+    provisional = {}
+    provisional_days = set()
+    impossible = []
 
     for open_shift in roster.open_shifts.all().order_by(
         "department",
@@ -427,31 +428,67 @@ def roster_excel(request, pk):
             shift_date=open_shift.date,
         )
 
-        open_drafts.setdefault(
-            open_shift.department,
+        chosen = None
+        for item in ranked:
+            employee_id = item["pattern"].employee_id
+            # Keep the draft simple: do not provisionally give the same
+            # employee two separate unresolved jobs on the same day.
+            if (employee_id, open_shift.date) in provisional_days:
+                continue
+            chosen = item
+            break
+
+        if chosen is None:
+            impossible.append((open_shift, signature))
+            continue
+
+        pattern = chosen["pattern"]
+        scheduled_ids.add(pattern.employee_id)
+        provisional.setdefault(
+            (pattern.employee_id, open_shift.date),
             [],
-        ).append(
-            {
-                "open_shift": open_shift,
-                "signature": signature,
-                "ranked": ranked,
-            }
+        ).append(signature)
+        provisional_days.add(
+            (pattern.employee_id, open_shift.date)
         )
 
-        # Reserve the top draft candidate so the following open-shift ranking
-        # behaves like a complete provisional roster instead of repeatedly
-        # selecting the same person.
-        if ranked:
-            best_pattern = ranked[0]["pattern"]
-            key = (
-                best_pattern.employee_id,
-                open_shift.department,
-            )
-            current_hours[key] = (
-                current_hours.get(key, 0.0)
-                + signature_duration(signature)
-            )
-            current_days[key] = current_days.get(key, 0) + 1
+        key = (pattern.employee_id, open_shift.department)
+        draft_hours = signature_duration(signature)
+        department_hours[key] = (
+            department_hours.get(key, 0.0)
+            + draft_hours
+        )
+        current_hours[key] = (
+            current_hours.get(key, 0.0)
+            + draft_hours
+        )
+        current_days[key] = current_days.get(key, 0) + 1
+
+    # Show every active employee who is actually part of the generated draft.
+    employees = list(
+        Employee.objects.filter(
+            is_active=True,
+            id__in=scheduled_ids,
+        ).order_by(
+            "department",
+            "first_name",
+            "last_name",
+        )
+    )
+    row_department = {}
+    for employee in employees:
+        restaurant_hours = department_hours.get(
+            (employee.id, Department.RESTAURANT), 0.0
+        )
+        bar_hours = department_hours.get(
+            (employee.id, Department.BAR), 0.0
+        )
+        if bar_hours > restaurant_hours:
+            row_department[employee.id] = Department.BAR
+        elif restaurant_hours > 0:
+            row_department[employee.id] = Department.RESTAURANT
+        else:
+            row_department[employee.id] = employee.department
 
     output = BytesIO()
     workbook = xlsxwriter.Workbook(
@@ -460,293 +497,170 @@ def roster_excel(request, pk):
     )
 
     title_format = workbook.add_format(
-        {
-            "bold": True,
-            "font_size": 16,
-            "align": "left",
-            "valign": "vcenter",
-        }
+        {"bold": True, "font_size": 16}
     )
     section_format = workbook.add_format(
-        {
-            "bold": True,
-            "bg_color": "#EAF0FF",
-            "border": 1,
-        }
+        {"bold": True, "bg_color": "#EAF0FF", "border": 1}
     )
     header_format = workbook.add_format(
-        {
-            "bold": True,
-            "bg_color": "#F5F7FA",
-            "border": 1,
-            "align": "center",
-            "valign": "vcenter",
-        }
+        {"bold": True, "border": 1, "align": "center"}
     )
+    name_format = workbook.add_format({"bold": True, "border": 1})
     cell_format = workbook.add_format(
-        {
-            "border": 1,
-            "align": "center",
-            "valign": "vcenter",
-        }
+        {"border": 1, "align": "center", "valign": "vcenter"}
     )
-    name_format = workbook.add_format(
-        {
-            "border": 1,
-            "bold": True,
-        }
-    )
-    draft_name_format = workbook.add_format(
-        {
-            "border": 1,
-            "bold": True,
-            "bg_color": "#FFF2CC",
-        }
-    )
-    draft_shift_format = workbook.add_format(
-        {
-            "border": 1,
-            "align": "center",
-            "valign": "vcenter",
-            "bg_color": "#FFF2CC",
-        }
-    )
+    replace_format = workbook.add_format({"border": 1})
     note_format = workbook.add_format(
-        {
-            "font_color": "#667085",
-            "italic": True,
-        }
+        {"font_color": "#667085", "italic": True}
     )
 
     sheet = workbook.add_worksheet("Roster")
     sheet.hide_gridlines(2)
-    sheet.freeze_panes(3, 1)
+    sheet.freeze_panes(3, 2)
     sheet.set_column("A:A", 23)
-    sheet.set_column("B:H", 15)
-    sheet.set_column("I:I", 13)
+    sheet.set_column("B:B", 23)
+    sheet.set_column("C:I", 15)
+    sheet.set_column("J:J", 11)
 
     sheet.merge_range(
-        "A1:I1",
+        "A1:J1",
         f"Week ending {roster.week_end:%d %B %Y}",
         title_format,
     )
     sheet.write(
         "A2",
-        (
-            "Complete AI draft. Yellow employee cells are provisional "
-            "choices — use the dropdown only if you want to change them."
-        ),
+        "Draft roster. Leave it as it is, or use Replace with / edit a shift and upload it back.",
         note_format,
     )
 
-    headers = ["Employee"]
-    headers += [
-        f"{day:%a}\n{day:%d %b}"
-        for day in days
-    ]
+    headers = ["Employee", "Replace with"]
+    headers += [f"{day:%a}\n{day:%d %b}" for day in days]
     headers.append("Hours")
-
-    row = 2
     for col, header in enumerate(headers):
-        sheet.write(row, col, header, header_format)
+        sheet.write(2, col, header, header_format)
 
     lists_sheet = workbook.add_worksheet("_Lists")
     lists_sheet.hide()
+    meta_sheet = workbook.add_worksheet("_Meta")
+    meta_sheet.hide()
+    meta_sheet.write("A1", "roster_id")
+    meta_sheet.write("B1", roster.pk)
+    meta_sheet.write("A2", "week_start")
+    meta_sheet.write("B2", roster.week_start.isoformat())
+    meta_sheet.write("A3", "format")
+    meta_sheet.write("B3", "manager-workbook-v1")
+    meta_sheet.write_row(4, 0, ["excel_row", "employee_id", "department"])
+
+    # Replacement lists are department-specific and deliberately simple.
+    replacement_ranges = {}
     list_col = 0
+    for department in (Department.RESTAURANT, Department.BAR):
+        if department == Department.BAR:
+            candidates = Employee.objects.filter(
+                is_active=True,
+                can_work_bar=True,
+            ).order_by("first_name", "last_name")
+        else:
+            candidates = Employee.objects.filter(
+                is_active=True,
+                can_work_restaurant=True,
+            ).order_by("first_name", "last_name")
 
-    row += 1
+        names = [employee.full_name for employee in candidates]
+        if not names:
+            continue
+        for list_row, name in enumerate(names):
+            lists_sheet.write(list_row, list_col, name)
+        col_letter = xlsxwriter.utility.xl_col_to_name(list_col)
+        range_name = f"Replacement_{department.title()}"
+        workbook.define_name(
+            range_name,
+            f"='_Lists'!${col_letter}$1:${col_letter}${len(names)}",
+        )
+        replacement_ranges[department] = range_name
+        list_col += 1
 
+    row = 3
+    meta_row = 5
     for department, label in (
         (Department.RESTAURANT, "Restaurant"),
         (Department.BAR, "Bar"),
     ):
-        employees = list(
-            employees_by_department.get(
-                department,
-                {},
-            ).values()
-        )
-        draft_rows = open_drafts.get(department, [])
-
-        if not employees and not draft_rows:
+        department_employees = [
+            employee for employee in employees
+            if row_department.get(employee.id) == department
+        ]
+        if not department_employees:
             continue
 
-        sheet.merge_range(
-            row,
-            0,
-            row,
-            8,
-            label,
-            section_format,
-        )
+        sheet.merge_range(row, 0, row, 9, label, section_format)
         row += 1
 
-        employees.sort(
-            key=lambda employee: (
-                employee.first_name.lower(),
-                employee.last_name.lower(),
-            )
-        )
-
-        for employee in employees:
-            sheet.write(
-                row,
-                0,
-                employee.full_name,
-                name_format,
-            )
-            total_hours = 0.0
-
-            for day_index, day in enumerate(days, start=1):
-                employee_shifts = sorted(
-                    shift_map.get(
-                        (employee.id, day),
-                        [],
-                    ),
-                    key=lambda item: item.segment,
-                )
-
-                if employee_shifts:
-                    value = ", ".join(
-                        (
-                            f"{shift.start_time:%H:%M}-"
-                            f"{shift.end_time:%H:%M}"
-                        )
-                        for shift in employee_shifts
-                    )
-                    total_hours += sum(
-                        shift.duration_hours
-                        for shift in employee_shifts
-                    )
-                else:
-                    value = "OFF"
-
-                sheet.write(
-                    row,
-                    day_index,
-                    value,
-                    cell_format,
-                )
-
-            sheet.write_number(
-                row,
-                8,
-                round(total_hours, 1),
-                cell_format,
-            )
-            row += 1
-
-        # Every unresolved shift becomes a completed provisional row.
-        # The top-ranked employee is preselected, but the yellow name
-        # cell contains a dropdown of all ranked eligible alternatives.
-        for draft in draft_rows:
-            open_shift = draft["open_shift"]
-            signature = draft["signature"]
-            ranked = draft["ranked"]
-
-            names = [
-                item["pattern"].employee.full_name
-                for item in ranked
-            ]
-
-            if names:
-                chosen_name = names[0]
-
-                for list_row, name in enumerate(names):
-                    lists_sheet.write(
-                        list_row,
-                        list_col,
-                        name,
-                    )
-
-                range_name = (
-                    f"DraftChoices_{open_shift.pk}"
-                )
-                column_letter = (
-                    xlsxwriter.utility.xl_col_to_name(
-                        list_col
-                    )
-                )
-                workbook.define_name(
-                    range_name,
-                    (
-                        f"='_Lists'!${column_letter}$1:"
-                        f"${column_letter}${len(names)}"
-                    ),
-                )
-                sheet.write(
-                    row,
-                    0,
-                    chosen_name,
-                    draft_name_format,
-                )
+        for employee in department_employees:
+            sheet.write(row, 0, employee.full_name, name_format)
+            sheet.write_blank(row, 1, None, replace_format)
+            range_name = replacement_ranges.get(department)
+            if range_name:
                 sheet.data_validation(
-                    row,
-                    0,
-                    row,
-                    0,
+                    row, 1, row, 1,
                     {
                         "validate": "list",
                         "source": f"={range_name}",
-                        "input_title": "AI draft choice",
-                        "input_message": (
-                            "Leave this employee or choose "
-                            "another available option."
-                        ),
+                        "input_title": "Replace employee",
+                        "input_message": "Leave blank, or choose another suitable employee.",
                     },
                 )
-                list_col += 1
-            else:
+
+            total_hours = 0.0
+            for day_col, day in enumerate(days, start=2):
+                values = []
+                employee_shifts = sorted(
+                    shift_map.get((employee.id, day), []),
+                    key=lambda item: item.segment,
+                )
+                for shift in employee_shifts:
+                    values.append(
+                        f"{shift.start_time:%H:%M}-{shift.end_time:%H:%M}"
+                    )
+                    total_hours += shift.duration_hours
+
+                for signature in provisional.get((employee.id, day), []):
+                    values.append(signature)
+                    total_hours += signature_duration(signature)
+
                 sheet.write(
                     row,
-                    0,
-                    "UNASSIGNED",
-                    draft_name_format,
+                    day_col,
+                    ", ".join(values) if values else "OFF",
+                    cell_format,
                 )
 
-            for day_index, day in enumerate(days, start=1):
-                if day == open_shift.date:
-                    sheet.write(
-                        row,
-                        day_index,
-                        signature,
-                        draft_shift_format,
-                    )
-                else:
-                    sheet.write(
-                        row,
-                        day_index,
-                        "OFF",
-                        cell_format,
-                    )
-
-            sheet.write_number(
-                row,
-                8,
-                round(signature_duration(signature), 1),
-                draft_shift_format,
+            sheet.write_number(row, 9, round(total_hours, 1), cell_format)
+            meta_sheet.write_row(
+                meta_row,
+                0,
+                [row + 1, employee.id, department],
             )
+            meta_row += 1
+            row += 1
 
-            if names:
-                sheet.write_comment(
-                    row,
-                    0,
-                    (
-                        "AI provisional assignment for "
-                        f"{open_shift.date:%a %d %b} "
-                        f"{signature}. Change the employee "
-                        "with the dropdown if needed."
-                    ),
-                )
+    if impossible:
+        # This should be rare; keep it on the same sheet without creating a
+        # separate manager workflow.
+        row += 1
+        sheet.write(row, 0, "Unassigned", section_format)
+        row += 1
+        for open_shift, signature in impossible:
+            sheet.write(row, 0, "UNASSIGNED", name_format)
+            day_col = (open_shift.date - roster.week_start).days + 2
+            if 2 <= day_col <= 8:
+                sheet.write(row, day_col, signature, cell_format)
             row += 1
 
     workbook.close()
     output.seek(0)
 
-    filename = (
-        f"roster-week-ending-"
-        f"{roster.week_end:%Y-%m-%d}.xlsx"
-    )
+    filename = f"roster-week-ending-{roster.week_end:%Y-%m-%d}.xlsx"
     response = HttpResponse(
         output.getvalue(),
         content_type=(
@@ -754,10 +668,158 @@ def roster_excel(request, pk):
             "spreadsheetml.sheet"
         ),
     )
-    response["Content-Disposition"] = (
-        f'attachment; filename="{filename}"'
-    )
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
     return response
+
+
+@login_required
+@transaction.atomic
+def roster_excel_import(request, pk):
+    roster = get_object_or_404(RosterWeek, pk=pk)
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+    if roster.status == RosterStatus.PUBLISHED:
+        messages.error(request, "Published rosters cannot be replaced from Excel.")
+        return redirect("roster:detail", pk=pk)
+
+    upload = request.FILES.get("workbook")
+    if not upload:
+        messages.error(request, "Choose the completed Excel roster first.")
+        return redirect("roster:detail", pk=pk)
+
+    try:
+        workbook = load_workbook(upload, data_only=False)
+    except Exception:
+        messages.error(request, "That file is not a readable Excel workbook.")
+        return redirect("roster:detail", pk=pk)
+
+    if "Roster" not in workbook.sheetnames or "_Meta" not in workbook.sheetnames:
+        messages.error(request, "Use the Manager Workbook downloaded from this roster.")
+        return redirect("roster:detail", pk=pk)
+
+    sheet = workbook["Roster"]
+    meta = workbook["_Meta"]
+    if meta["B1"].value != roster.pk:
+        messages.error(request, "That workbook belongs to a different roster week.")
+        return redirect("roster:detail", pk=pk)
+
+    rows = []
+    meta_row = 6
+    while meta.cell(meta_row, 1).value:
+        excel_row = int(meta.cell(meta_row, 1).value)
+        employee_id = int(meta.cell(meta_row, 2).value)
+        department = str(meta.cell(meta_row, 3).value)
+        original = Employee.objects.filter(pk=employee_id, is_active=True).first()
+        if original is None:
+            messages.error(request, "An employee in this workbook no longer exists.")
+            return redirect("roster:detail", pk=pk)
+
+        replacement_name = str(sheet.cell(excel_row, 2).value or "").strip()
+        employee = original
+        if replacement_name:
+            candidates = Employee.objects.filter(is_active=True)
+            if department == Department.BAR:
+                candidates = candidates.filter(can_work_bar=True)
+            else:
+                candidates = candidates.filter(can_work_restaurant=True)
+            matches = [
+                candidate for candidate in candidates
+                if candidate.full_name == replacement_name
+            ]
+            if len(matches) != 1:
+                messages.error(
+                    request,
+                    f"Could not uniquely match replacement employee '{replacement_name}'.",
+                )
+                return redirect("roster:detail", pk=pk)
+            employee = matches[0]
+
+        day_values = []
+        for day_index in range(7):
+            raw = sheet.cell(excel_row, day_index + 3).value
+            value = str(raw or "OFF").strip()
+            day_values.append(value)
+
+        rows.append((employee, department, day_values))
+        meta_row += 1
+
+    # Replacements may point at an employee who already has a row. That is
+    # intentional: their schedules are merged on import, then checked for
+    # overlaps before anything is written to the database.
+    parsed_rows = []
+    try:
+        for employee, department, day_values in rows:
+            parsed_days = []
+            for day_index, value in enumerate(day_values):
+                if value.lower() in {"off", "-", "none", ""}:
+                    parsed_days.append([])
+                    continue
+                parsed_days.append(parse_signature(value))
+            parsed_rows.append((employee, department, parsed_days))
+    except Exception:
+        messages.error(
+            request,
+            "One of the shift cells is not valid. Use 09:00-17:00, a comma-separated split shift, or OFF.",
+        )
+        return redirect("roster:detail", pk=pk)
+
+    merged = {}
+    for employee, department, parsed_days in parsed_rows:
+        for day_index, parsed in enumerate(parsed_days):
+            if not parsed:
+                continue
+            shift_date = roster.week_start + timedelta(days=day_index)
+            merged.setdefault(
+                (employee.id, department, shift_date),
+                {"employee": employee, "segments": []},
+            )["segments"].extend(parsed)
+
+    # Validate combined rows before replacing the live draft.
+    for item in merged.values():
+        intervals = []
+        for _segment, start, end in item["segments"]:
+            start_minutes = start.hour * 60 + start.minute
+            end_minutes = end.hour * 60 + end.minute
+            if end_minutes <= start_minutes:
+                end_minutes += 24 * 60
+            intervals.append((start_minutes, end_minutes))
+        intervals.sort()
+        for previous, current in zip(intervals, intervals[1:]):
+            if previous[1] > current[0]:
+                messages.error(
+                    request,
+                    "A replacement would give an employee overlapping shifts. Change the replacement and upload again.",
+                )
+                return redirect("roster:detail", pk=pk)
+
+    roster.shifts.all().delete()
+    roster.open_shifts.all().delete()
+
+    created = 0
+    for (_employee_id, department, shift_date), item in merged.items():
+        employee = item["employee"]
+        for segment_index, (_segment, start, end) in enumerate(
+            item["segments"], start=1
+        ):
+            Shift.objects.create(
+                roster_week=roster,
+                employee=employee,
+                department=department,
+                date=shift_date,
+                start_time=start,
+                end_time=end,
+                segment=segment_index,
+                source="manual",
+                confidence=100,
+                notes="Imported from Manager Workbook",
+            )
+            created += 1
+
+    messages.success(
+        request,
+        f"Manager Workbook applied. {created} shift segments imported.",
+    )
+    return redirect("roster:detail", pk=pk)
 @login_required
 def save_cell(request, pk):
     if request.method != "POST":
