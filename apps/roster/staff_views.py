@@ -4,6 +4,7 @@ from django.contrib import messages
 from django.http import HttpResponseBadRequest
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
+from django.utils import timezone
 
 from apps.employees.models import Employee
 from .models import (
@@ -15,6 +16,7 @@ from .models import (
     Shift,
     ShiftResponse,
     ShiftResponseStatus,
+    StaffRosterNotice,
 )
 from .services.generator import candidate_availability
 
@@ -38,6 +40,21 @@ def staff_portal(request):
         return redirect("roster:staff")
 
     employee = _staff_employee(request)
+
+
+    if (
+        employee
+        and request.method == "POST"
+        and request.POST.get("view_roster") == "yes"
+    ):
+        StaffRosterNotice.objects.filter(
+            employee=employee,
+            seen_at__isnull=True,
+        ).update(seen_at=timezone.now())
+
+        request.session["staff_roster_open"] = True
+        return redirect("roster:staff")
+
 
     # UI-only clock state for this roster sandbox. It deliberately does not write
     # attendance/payroll records; the live clock app remains authoritative.
@@ -77,6 +94,18 @@ def staff_portal(request):
 
     today = date.today()
     horizon = today + timedelta(days=35)
+
+    unseen_notices = list(
+        StaffRosterNotice.objects.filter(
+            employee=employee,
+            seen_at__isnull=True,
+        ).select_related("roster_week")[:5]
+    )
+
+    show_roster = request.session.pop(
+        "staff_roster_open",
+        False,
+    )
     shifts = list(
         Shift.objects.filter(
             employee=employee,
@@ -150,6 +179,8 @@ def staff_portal(request):
             "open_shift_rows": open_shifts,
             "availability_exceptions": exceptions,
             "today": today,
+            "unseen_notices": unseen_notices,
+            "show_roster": show_roster,
         },
     )
 
@@ -176,12 +207,25 @@ def staff_shift_response(request, shift_id):
         defaults={
             "status": action,
             "reason": request.POST.get("reason", "").strip(),
+            "wants_replacement_shift": (
+                action == ShiftResponseStatus.CANNOT_WORK
+                and request.POST.get("wants_replacement_shift") == "yes"
+            ),
             "resolved_at": None,
             "resolved_by": None,
         },
     )
     if response.status == ShiftResponseStatus.CANNOT_WORK:
-        messages.warning(request, "Manager notified. Your shift stays assigned until it is rearranged.")
+        if response.wants_replacement_shift:
+            messages.warning(
+                request,
+                "Manager notified. We also told them you'd like another shift if possible.",
+            )
+        else:
+            messages.warning(
+                request,
+                "Manager notified. Your shift stays assigned until it is rearranged.",
+            )
     else:
         messages.success(request, "Shift confirmed.")
     return redirect("roster:staff")

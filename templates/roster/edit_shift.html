@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-header">
+  <div>
+    <h1>Edit shift</h1>
+    <p class="muted">
+      {{ shift.date|date:"l j F" }}
+    </p>
+  </div>
+</div>
+
+<form method="post" class="card form-card" style="max-width:620px;">
+  {% csrf_token %}
+
+  <div style="display:grid;gap:18px;">
+
+    <label>
+      <strong>Employee</strong><br><br>
+      <select name="employee_id" style="width:100%;">
+        {% for employee in employees %}
+          <option
+            value="{{ employee.pk }}"
+            {% if employee.pk == shift.employee_id %}selected{% endif %}
+          >
+            {{ employee.full_name }}
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label>
+      <strong>Start</strong><br><br>
+      <input
+        type="time"
+        name="start_time"
+        value="{{ shift.start_time|time:'H:i' }}"
+        required
+      >
+    </label>
+
+    <label>
+      <strong>Finish</strong><br><br>
+      <input
+        type="time"
+        name="end_time"
+        value="{{ shift.end_time|time:'H:i' }}"
+        required
+      >
+    </label>
+
+    <div class="actions">
+      <button class="btn primary" type="submit">
+        Save
+      </button>
+
+      <a
+        class="btn"
+        href="{% url 'roster:detail' roster.pk %}"
+      >
+        Cancel
+      </a>
+    </div>
+
+  </div>
+</form>
+
+{% endblock %}

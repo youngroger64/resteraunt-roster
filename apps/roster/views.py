@@ -22,6 +22,7 @@ from .models import (
     Shift,
     StaffingPattern,
     ShiftResponse,
+    StaffRosterNotice,
     ShiftResponseStatus,
     EmployeeScheduleProfile,
     OpenShiftRequest,
@@ -38,6 +39,12 @@ from .services.generator import (
 )
 from .services.learner import learn_patterns
 from .services.publisher import publish_roster
+from apps.roster.services.clocking_import import import_clocking_patterns
+
+from apps.roster.services.generator import copied_shift_availability_issues
+
+from apps.roster.services.generator import replacement_suggestions_for_shift
+from apps.roster.services.generator import shift_band, employee_typical_band
 
 @login_required
 def roster_list(request):
@@ -45,17 +52,64 @@ def roster_list(request):
 
 @login_required
 def roster_create(request):
+    """
+    Prepare the next weekly roster from the latest real weekly roster.
+
+    The previous roster is the baseline. We preserve employees,
+    departments and exact shift times rather than rebuilding the week
+    to satisfy abstract hour targets.
+    """
     form = RosterWeekForm(request.POST or None)
-    latest = RosterWeek.objects.filter(purpose=RosterPurpose.WEEKLY).first()
+
+    latest = (
+        RosterWeek.objects
+        .filter(purpose=RosterPurpose.WEEKLY)
+        .order_by("-week_start")
+        .first()
+    )
+
     if request.method == "POST" and form.is_valid():
         roster = form.save(commit=False)
         roster.purpose = RosterPurpose.WEEKLY
         roster.save()
-        if request.POST.get("copy_latest") and latest:
-            copy_roster(latest, roster)
-        return redirect("roster:detail", pk=roster.pk)
-    return render(request, "roster/create.html", {"form":form,"latest":latest})
 
+        copied = 0
+        issues = []
+
+        if request.POST.get("copy_latest") and latest:
+            copied = copy_roster(latest, roster)
+            issues = copied_shift_availability_issues(roster)
+
+            request.session[f"copied_issues_{roster.pk}"] = issues
+
+            if issues:
+                messages.warning(
+                    request,
+                    (
+                        f"Next week prepared from the previous roster. "
+                        f"{copied} shifts kept exactly as scheduled. "
+                        f"{len(issues)} need attention."
+                    ),
+                )
+            else:
+                messages.success(
+                    request,
+                    (
+                        f"Next week prepared from the previous roster. "
+                        f"{copied} shifts copied with no availability problems."
+                    ),
+                )
+
+        return redirect("roster:detail", pk=roster.pk)
+
+    return render(
+        request,
+        "roster/create.html",
+        {
+            "form": form,
+            "latest": latest,
+        },
+    )
 
 @login_required
 def learn(request):
@@ -86,6 +140,70 @@ def learn(request):
             "payroll_record_count": payroll_record_count,
         },
     )
+
+@login_required
+def clocking_import(request):
+    from apps.roster.models import (
+        ClockingPatternImport,
+        EmployeeClockingPattern,
+    )
+
+    result = None
+
+    if request.method == "POST":
+        roster_file = request.FILES.get("roster_patterns")
+        day_file = request.FILES.get("day_patterns")
+
+        if not roster_file or not day_file:
+            messages.error(
+                request,
+                "Please choose both clocking CSV files.",
+            )
+        else:
+            try:
+                result = import_clocking_patterns(
+                    roster_patterns_file=roster_file,
+                    day_patterns_file=day_file,
+                    source_name=roster_file.name,
+                )
+
+                messages.success(
+                    request,
+                    (
+                        f"Clocking patterns imported for "
+                        f"{result['imported']} employees. "
+                        f"{len(result['unmatched'])} could not be matched."
+                    ),
+                )
+            except Exception as exc:
+                messages.error(
+                    request,
+                    f"Clocking import failed: {exc}",
+                )
+
+    latest = ClockingPatternImport.objects.first()
+
+    patterns = (
+        EmployeeClockingPattern.objects
+        .select_related("employee", "import_batch")
+        .order_by(
+            "worker_type",
+            "employee__first_name",
+            "employee__last_name",
+        )
+    )
+
+    return render(
+        request,
+        "roster/clocking_import.html",
+        {
+            "latest": latest,
+            "clocking_patterns": patterns,
+            "result": result,
+        },
+    )
+
+
 @login_required
 def pattern_list(request):
     return render(request, "roster/patterns.html", {
@@ -121,12 +239,48 @@ def save_schedule_profile(request, employee_id):
 
 @login_required
 def generate_pattern_roster(request):
+    """
+    Prepare next week's roster from the most recent previous weekly roster.
+
+    The manager's existing roster is the baseline. Employees, departments
+    and exact shift times are copied forward unchanged. The system only
+    highlights dated availability problems.
+    """
     form = GeneratePatternRosterForm(request.POST or None)
+
+    source_roster = None
+
+    week_start = None
+    if form.is_bound and form.is_valid():
+        week_start = form.cleaned_data["week_start"]
+
+        source_roster = (
+            RosterWeek.objects
+            .filter(
+                purpose=RosterPurpose.WEEKLY,
+                week_start__lt=week_start,
+            )
+            .order_by("-week_start")
+            .first()
+        )
+    else:
+        source_roster = (
+            RosterWeek.objects
+            .filter(purpose=RosterPurpose.WEEKLY)
+            .order_by("-week_start")
+            .first()
+        )
 
     if request.method == "POST" and form.is_valid():
         week_start = form.cleaned_data["week_start"]
-        existing = RosterWeek.objects.filter(week_start=week_start).first()
-        replace_existing = request.POST.get("replace_existing") == "yes"
+
+        existing = RosterWeek.objects.filter(
+            week_start=week_start
+        ).first()
+
+        replace_existing = (
+            request.POST.get("replace_existing") == "yes"
+        )
 
         if existing and not replace_existing:
             return render(
@@ -135,57 +289,87 @@ def generate_pattern_roster(request):
                 {
                     "form": form,
                     "existing_roster": existing,
+                    "source_roster": source_roster,
+                },
+            )
+
+        if existing and existing.status == RosterStatus.PUBLISHED:
+            messages.error(
+                request,
+                "That roster has already been published and will not be changed.",
+            )
+            return render(
+                request,
+                "roster/generate_patterns.html",
+                {
+                    "form": form,
+                    "existing_roster": existing,
+                    "published_existing": True,
+                    "source_roster": source_roster,
+                },
+            )
+
+        source_roster = (
+            RosterWeek.objects
+            .filter(
+                purpose=RosterPurpose.WEEKLY,
+                week_start__lt=week_start,
+            )
+            .exclude(pk=existing.pk if existing else None)
+            .order_by("-week_start")
+            .first()
+        )
+
+        if source_roster is None:
+            messages.error(
+                request,
+                "There is no previous weekly roster to use as the starting point.",
+            )
+            return render(
+                request,
+                "roster/generate_patterns.html",
+                {
+                    "form": form,
+                    "source_roster": None,
                 },
             )
 
         if existing:
-            if existing.status == RosterStatus.PUBLISHED:
-                messages.error(
-                    request,
-                    "That roster is published. Choose: open it, or create another week.",
-                )
-                return render(
-                    request,
-                    "roster/generate_patterns.html",
-                    {
-                        "form": form,
-                        "existing_roster": existing,
-                        "published_existing": True,
-                    },
-                )
-
             roster = existing
             roster.shifts.all().delete()
             roster.open_shifts.all().delete()
-            request.session.pop(f"unresolved_{roster.pk}", None)
         else:
             roster = RosterWeek.objects.create(
                 week_start=week_start,
                 purpose=RosterPurpose.WEEKLY,
             )
 
-        threshold = (
-            0
-            if form.cleaned_data["uncertain_choice"] == "best"
-            else 75
-        )
+        copied = copy_roster(source_roster, roster)
 
-        result = generate_business_roster(
-            roster,
-            uncertain_threshold=threshold,
-        )
+        issues = copied_shift_availability_issues(roster)
+        request.session[f"copied_issues_{roster.pk}"] = issues
 
-        if existing:
-            messages.success(
+        roster.notes = (
+            f"Prepared from {source_roster}. "
+            f"Original employees and shift times copied forward."
+        )
+        roster.save(update_fields=["notes"])
+
+        if issues:
+            messages.warning(
                 request,
-                f"Draft replaced with {result['created']} assigned shift segments. "
-                f"{result['open']} shifts need a choice.",
+                (
+                    f"Next week prepared. {copied} shifts kept from the "
+                    f"previous roster; {len(issues)} need attention."
+                ),
             )
         else:
             messages.success(
                 request,
-                f"Generated {result['created']} assigned shift segments. "
-                f"{result['open']} shifts need a choice.",
+                (
+                    f"Next week prepared. {copied} shifts copied from the "
+                    f"previous roster with no availability problems."
+                ),
             )
 
         return redirect("roster:detail", pk=roster.pk)
@@ -193,12 +377,37 @@ def generate_pattern_roster(request):
     return render(
         request,
         "roster/generate_patterns.html",
-        {"form": form},
+        {
+            "form": form,
+            "source_roster": source_roster,
+        },
     )
 
 @login_required
 def roster_detail(request, pk):
     roster = get_object_or_404(RosterWeek, pk=pk)
+
+    copied_issues = request.session.get(
+        f"copied_issues_{pk}",
+        [],
+    )
+
+    # Attach replacement suggestions to genuine copied-roster
+    # availability problems.
+    for issue in copied_issues:
+        problem_shift = roster.shifts.filter(
+            pk=issue.get("shift_id")
+        ).first()
+
+        if problem_shift is None:
+            issue["suggestions"] = []
+            continue
+
+        issue["suggestions"] = replacement_suggestions_for_shift(
+            roster,
+            problem_shift,
+            limit=5,
+        )
     days = [roster.week_start + timedelta(days=i) for i in range(7)]
 
     shifts = list(roster.shifts.select_related("employee"))
@@ -402,6 +611,216 @@ def roster_detail(request, pk):
             "choices": choices,
         })
 
+
+    # --------------------------------------------------------
+    # Optional requests from staff who lost a shift but asked
+    # to keep their hours. These are NOT roster problems.
+    #
+    # Group by employee and distinguish:
+    #   GOOD MATCH  = resembles their normal/lost shift times
+    #   POSSIBLE    = technically available, but unusual
+    # --------------------------------------------------------
+    replacement_hour_requests = []
+
+    hour_responses = list(
+        ShiftResponse.objects
+        .filter(
+            shift__roster_week=roster,
+            status=ShiftResponseStatus.RESOLVED,
+            wants_replacement_shift=True,
+        )
+        .select_related("employee", "shift")
+        .order_by(
+            "employee__first_name",
+            "employee__last_name",
+            "shift__date",
+        )
+    )
+
+    responses_by_employee = {}
+
+    for response in hour_responses:
+        responses_by_employee.setdefault(
+            response.employee_id,
+            [],
+        ).append(response)
+
+    for employee_id, responses in responses_by_employee.items():
+        employee = responses[0].employee
+        pattern = patterns_by_employee.get(employee_id)
+
+        lost_shifts = [response.shift for response in responses]
+
+        lost_hours = sum(
+            float(shift.duration_hours)
+            for shift in lost_shifts
+        )
+
+        lost_bands = set()
+
+        for lost_shift in lost_shifts:
+            lost_signature = (
+                f"{lost_shift.start_time.strftime('%H:%M')}-"
+                f"{lost_shift.end_time.strftime('%H:%M')}"
+            )
+            lost_bands.add(
+                shift_band(lost_signature)
+            )
+
+        possible = []
+
+        for open_shift in roster.open_shifts.all().order_by(
+            "date",
+            "start_time",
+        ):
+            if (
+                open_shift.department == Department.BAR
+                and not employee.can_work_bar
+            ):
+                continue
+
+            if (
+                open_shift.department == Department.RESTAURANT
+                and not employee.can_work_restaurant
+            ):
+                continue
+
+            signature = (
+                open_shift.source_signature
+                or open_shift.display_time.replace("–", "-")
+            )
+
+            availability = candidate_availability(
+                roster=roster,
+                employee=employee,
+                shift_date=open_shift.date,
+                signature=signature,
+            )
+
+            if not availability["available"]:
+                continue
+
+            proposed_band = shift_band(signature)
+
+            score = 0
+            reasons = []
+
+            # Strongest signal: compare real start times with shifts
+            # the employee gave up. Evening/closing shifts should still
+            # match even if one crosses our "evening" / "late" boundary.
+            proposed_start_minutes = (
+                open_shift.start_time.hour * 60
+                + open_shift.start_time.minute
+            )
+
+            closest_start_difference = None
+
+            for lost_shift in lost_shifts:
+                if lost_shift.department != open_shift.department:
+                    continue
+
+                lost_start_minutes = (
+                    lost_shift.start_time.hour * 60
+                    + lost_shift.start_time.minute
+                )
+
+                difference = abs(
+                    proposed_start_minutes - lost_start_minutes
+                )
+
+                if (
+                    closest_start_difference is None
+                    or difference < closest_start_difference
+                ):
+                    closest_start_difference = difference
+
+            if (
+                closest_start_difference is not None
+                and closest_start_difference <= 180
+            ):
+                score += 120
+                reasons.append(
+                    "Similar time to the shift they gave up"
+                )
+
+            # Existing band comparison remains useful as a secondary signal.
+            elif proposed_band in lost_bands:
+                score += 100
+                reasons.append(
+                    "Similar time to the shift they gave up"
+                )
+
+            # Also compare against their learned normal time for that day.
+            if pattern:
+                normal_band = employee_typical_band(
+                    pattern,
+                    open_shift.date.weekday(),
+                )
+
+                if (
+                    normal_band != "unknown"
+                    and proposed_band == normal_band
+                ):
+                    score += 70
+                    reasons.append("Usually works this time")
+
+                # Treat neighbouring evening/late bands as the same
+                # real-world closing pattern.
+                elif {
+                    normal_band,
+                    proposed_band,
+                } == {"evening", "late"}:
+                    score += 60
+                    reasons.append(
+                        "Close to their usual evening time"
+                    )
+
+            if not reasons:
+                reasons.append(
+                    "Available, but not their usual shift time"
+                )
+
+            possible.append(
+                {
+                    "shift": open_shift,
+                    "score": score,
+                    "reasons": reasons,
+                    "is_good_match": score >= 70,
+                }
+            )
+
+        possible.sort(
+            key=lambda item: (
+                -item["score"],
+                item["shift"].date,
+                item["shift"].start_time,
+            )
+        )
+
+        good_matches = [
+            item
+            for item in possible
+            if item["is_good_match"]
+        ]
+
+        other_possible = [
+            item
+            for item in possible
+            if not item["is_good_match"]
+        ]
+
+        replacement_hour_requests.append(
+            {
+                "employee": employee,
+                "responses": responses,
+                "response": responses[0],
+                "lost_shifts": lost_shifts,
+                "lost_hours": lost_hours,
+                "good_matches": good_matches[:3],
+                "other_possible": other_possible[:5],
+            }
+        )
+
     open_shift_requests = list(
         OpenShiftRequest.objects.filter(
             open_shift__roster_week=roster,
@@ -414,6 +833,7 @@ def roster_detail(request, pk):
         "roster/detail.html",
         {
             "roster": roster,
+            "copied_issues": copied_issues,
             "days": days,
             "rows": rows,
             "departments": Department.choices,
@@ -422,6 +842,7 @@ def roster_detail(request, pk):
             "show_all": show_all,
             "scheduled_employee_count": len(scheduled_employee_ids),
             "shift_change_requests": shift_change_requests,
+            "replacement_hour_requests": replacement_hour_requests,
             "open_shift_requests": open_shift_requests,
         },
     )
@@ -1063,6 +1484,172 @@ def assign_suggested_employee(request, pk, open_shift_id, employee_id):
     return redirect("roster:detail", pk=pk)
 
 
+
+@login_required
+def dismiss_replacement_hours(request, pk, response_id):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+
+    roster = get_object_or_404(RosterWeek, pk=pk)
+
+    response = get_object_or_404(
+        ShiftResponse,
+        pk=response_id,
+        shift__roster_week=roster,
+        status=ShiftResponseStatus.RESOLVED,
+        wants_replacement_shift=True,
+    )
+
+    employee_name = response.employee.full_name
+
+    response.wants_replacement_shift = False
+    response.save(
+        update_fields=[
+            "wants_replacement_shift",
+            "updated_at",
+        ]
+    )
+
+    messages.info(
+        request,
+        f"No replacement hours will be arranged for {employee_name}.",
+    )
+
+    return redirect("roster:detail", pk=pk)
+
+
+@login_required
+def give_replacement_open_shift(
+    request,
+    pk,
+    response_id,
+    open_shift_id,
+):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+
+    roster = get_object_or_404(RosterWeek, pk=pk)
+
+    response = get_object_or_404(
+        ShiftResponse.objects.select_related("employee"),
+        pk=response_id,
+        shift__roster_week=roster,
+        status=ShiftResponseStatus.RESOLVED,
+        wants_replacement_shift=True,
+    )
+
+    employee = response.employee
+
+    open_shift = get_object_or_404(
+        OpenShift,
+        pk=open_shift_id,
+        roster_week=roster,
+    )
+
+    if (
+        open_shift.department == Department.BAR
+        and not employee.can_work_bar
+    ):
+        messages.error(request, "That employee cannot work Bar.")
+        return redirect("roster:detail", pk=pk)
+
+    if (
+        open_shift.department == Department.RESTAURANT
+        and not employee.can_work_restaurant
+    ):
+        messages.error(
+            request,
+            "That employee cannot work Restaurant.",
+        )
+        return redirect("roster:detail", pk=pk)
+
+    signature = (
+        open_shift.source_signature
+        or open_shift.display_time.replace("–", "-")
+    )
+
+    availability = candidate_availability(
+        roster=roster,
+        employee=employee,
+        shift_date=open_shift.date,
+        signature=signature,
+    )
+
+    if not availability["available"]:
+        messages.error(
+            request,
+            (
+                f"{employee.full_name} cannot take that shift: "
+                f"{availability['reason']}"
+            ),
+        )
+        return redirect("roster:detail", pk=pk)
+
+    parts = parse_signature(signature)
+
+    # An employee may legitimately work more than one separated shift
+    # on the same day. The database uses segment numbers to distinguish
+    # those shifts, so choose the next available segment rather than
+    # colliding with an existing segment=1 shift.
+    used_segments = set(
+        Shift.objects.filter(
+            roster_week=roster,
+            employee=employee,
+            date=open_shift.date,
+        ).values_list("segment", flat=True)
+    )
+
+    for _parsed_segment, start, end in parts:
+        segment = 1
+
+        while segment in used_segments:
+            segment += 1
+
+        new_shift = Shift.objects.create(
+            roster_week=roster,
+            employee=employee,
+            department=open_shift.department,
+            date=open_shift.date,
+            start_time=start,
+            end_time=end,
+            segment=segment,
+            source="replacement_hours",
+            confidence=100,
+            notes="Replacement hours requested by employee",
+        )
+
+        if roster.status == RosterStatus.PUBLISHED:
+            StaffRosterNotice.objects.create(
+                employee=employee,
+                roster_week=roster,
+                message=(
+                    f"New shift: "
+                    f"{new_shift.date.strftime('%a %d %b')} · "
+                    f"{new_shift.start_time.strftime('%H:%M')}–"
+                    f"{new_shift.end_time.strftime('%H:%M')}."
+                ),
+            )
+
+        used_segments.add(segment)
+
+    open_shift.delete()
+
+    response.wants_replacement_shift = False
+    response.save(
+        update_fields=[
+            "wants_replacement_shift",
+            "updated_at",
+        ]
+    )
+
+    messages.success(
+        request,
+        f"{employee.full_name} has been given the replacement shift.",
+    )
+
+    return redirect("roster:detail", pk=pk)
+
+
 @login_required
 def replace_requested_shift(request, pk, response_id, employee_id):
     if request.method != "POST":
@@ -1093,7 +1680,14 @@ def replace_requested_shift(request, pk, response_id, employee_id):
         messages.error(request, "That employee cannot work Restaurant.")
         return redirect("roster:detail", pk=pk)
 
-    original_name = response.employee.full_name
+    original_employee = response.employee
+    original_name = original_employee.full_name
+    old_display = (
+        f"{shift.date.strftime('%a %d %b')} · "
+        f"{shift.start_time.strftime('%H:%M')}–"
+        f"{shift.end_time.strftime('%H:%M')}"
+    )
+
     shift.employee = replacement
     shift.source = "manager_rearrange"
     shift.notes = (shift.notes + " | " if shift.notes else "") + f"Reassigned from {original_name}"
@@ -1102,6 +1696,20 @@ def replace_requested_shift(request, pk, response_id, employee_id):
     response.resolved_at = timezone.now()
     response.resolved_by = request.user
     response.save(update_fields=["status", "resolved_at", "resolved_by", "updated_at"])
+
+    if roster.status == RosterStatus.PUBLISHED:
+        StaffRosterNotice.objects.create(
+            employee=original_employee,
+            roster_week=roster,
+            message=f"Your {old_display} shift was changed.",
+        )
+
+        StaffRosterNotice.objects.create(
+            employee=replacement,
+            roster_week=roster,
+            message=f"New shift: {old_display}.",
+        )
+
     messages.success(request, f"Shift moved from {original_name} to {replacement.full_name}.")
     return redirect("roster:detail", pk=pk)
 
@@ -1191,6 +1799,158 @@ def roster_delete(request, pk):
             "roster": roster,
             "shift_count": shift_count,
             "open_shift_count": open_shift_count,
+        },
+    )
+
+
+
+
+@login_required
+def use_replacement(request, pk, shift_id):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+
+    roster = get_object_or_404(RosterWeek, pk=pk)
+
+    shift = get_object_or_404(
+        Shift,
+        pk=shift_id,
+        roster_week=roster,
+    )
+
+    employee_id = request.POST.get("employee_id")
+
+    employee = get_object_or_404(
+        Employee,
+        pk=employee_id,
+        is_active=True,
+    )
+
+    # Recalculate valid suggestions at the moment the manager clicks.
+    valid = replacement_suggestions_for_shift(
+        roster,
+        shift,
+        limit=20,
+    )
+
+    valid_ids = {
+        item["employee_id"]
+        for item in valid
+    }
+
+    if employee.pk not in valid_ids:
+        messages.error(
+            request,
+            "That employee is no longer available for this shift.",
+        )
+        return redirect("roster:detail", pk=roster.pk)
+
+    old_employee = shift.employee
+
+    shift.employee = employee
+    shift.source = "manager"
+    shift.confidence = 100
+    shift.save(
+        update_fields=[
+            "employee",
+            "source",
+            "confidence",
+        ]
+    )
+
+    # Remove this resolved issue from the session.
+    session_key = f"copied_issues_{roster.pk}"
+
+    issues = request.session.get(session_key, [])
+
+    issues = [
+        issue
+        for issue in issues
+        if issue.get("shift_id") != shift.pk
+    ]
+
+    request.session[session_key] = issues
+    request.session.modified = True
+
+    messages.success(
+        request,
+        (
+            f"{employee.full_name} will cover "
+            f"{old_employee.full_name}'s shift."
+        ),
+    )
+
+    return redirect("roster:detail", pk=roster.pk)
+
+
+@login_required
+def edit_shift(request, pk, shift_id):
+    roster = get_object_or_404(RosterWeek, pk=pk)
+    shift = get_object_or_404(
+        Shift.objects.select_related("employee"),
+        pk=shift_id,
+        roster_week=roster,
+    )
+
+    if request.method == "POST":
+        employee_id = request.POST.get("employee_id")
+        start_value = request.POST.get("start_time")
+        end_value = request.POST.get("end_time")
+
+        if not employee_id or not start_value or not end_value:
+            messages.error(
+                request,
+                "Choose an employee and enter both start and finish times.",
+            )
+            return redirect("roster:edit_shift", pk=pk, shift_id=shift_id)
+
+        employee = get_object_or_404(Employee, pk=employee_id)
+
+        try:
+            from datetime import time
+            start_parts = [int(x) for x in start_value.split(":")]
+            end_parts = [int(x) for x in end_value.split(":")]
+
+            start_time = time(start_parts[0], start_parts[1])
+            end_time = time(end_parts[0], end_parts[1])
+        except Exception:
+            messages.error(request, "Enter valid times.")
+            return redirect("roster:edit_shift", pk=pk, shift_id=shift_id)
+
+        shift.employee = employee
+        shift.start_time = start_time
+        shift.end_time = end_time
+        shift.source = "manager"
+        shift.confidence = 100
+        shift.save(
+            update_fields=[
+                "employee",
+                "start_time",
+                "end_time",
+                "source",
+                "confidence",
+            ]
+        )
+
+        messages.success(
+            request,
+            f"Shift updated for {employee.full_name}.",
+        )
+        return redirect("roster:detail", pk=roster.pk)
+
+    employees = (
+        Employee.objects
+        .filter(is_active=True)
+        .order_by("first_name", "last_name")
+    )
+
+    return render(
+        request,
+        "roster/edit_shift.html",
+        {
+            "roster": roster,
+            "shift": shift,
+            "employees": employees,
         },
     )
 

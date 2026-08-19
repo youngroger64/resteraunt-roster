@@ -43,9 +43,29 @@
       <p class="staff-test-note">Clock actions are session-only in this test project and do not affect payroll.</p>
     </section>
 
-    <button type="button" class="staff-roster-toggle" id="roster-toggle" aria-expanded="false" aria-controls="staff-roster-panel">View my roster</button>
+    {% if unseen_notices %}
+<section class="staff-roster-notice">
+  <strong>Roster changed</strong>
 
-    <div id="staff-roster-panel" class="staff-roster-panel" hidden>
+  {% for notice in unseen_notices %}
+    <div>{{ notice.message }}</div>
+  {% endfor %}
+
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="view_roster" value="yes">
+    <button type="submit" class="staff-notice-button">
+      View my roster
+    </button>
+  </form>
+</section>
+{% endif %}
+
+<button type="button" class="staff-roster-toggle" id="roster-toggle" aria-expanded="false" aria-controls="staff-roster-panel">{% if show_roster %}Hide my roster{% else %}View my roster{% endif %}</button>
+
+    <div id="staff-roster-panel"
+         class="staff-roster-panel"
+         {% if not show_roster %}hidden{% endif %}>
       <section class="staff-card">
         <div class="section-heading"><div><h2>My upcoming shifts</h2><p>Only tell the manager if something is wrong.</p></div></div>
         <div class="staff-shift-list">
@@ -57,7 +77,42 @@
             </div>
             <div class="shift-actions">
               {% if row.response.status != "cannot_work" %}
-              <details><summary>I can't work this shift</summary><form method="post" action="{% url 'roster:staff_shift_response' row.shift.pk %}">{% csrf_token %}<input type="hidden" name="action" value="cannot_work"><input type="text" name="reason" maxlength="250" placeholder="Reason (optional)"><button class="mini-btn danger">Tell manager</button></form></details>
+              <details class="cant-work-details">
+  <summary>I can't work this shift</summary>
+
+  <form method="post"
+        action="{% url 'roster:staff_shift_response' row.shift.pk %}">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="cannot_work">
+
+    <p><strong>Would you like another shift instead?</strong></p>
+
+    <label class="staff-choice">
+      <input type="radio"
+             name="wants_replacement_shift"
+             value="yes"
+             required>
+      Yes, I'd like the hours
+    </label>
+
+    <label class="staff-choice">
+      <input type="radio"
+             name="wants_replacement_shift"
+             value="no"
+             required>
+      No, just tell the manager
+    </label>
+
+    <input type="text"
+           name="reason"
+           maxlength="250"
+           placeholder="Anything the manager should know? (optional)">
+
+    <button class="mini-btn danger" type="submit">
+      Tell manager
+    </button>
+  </form>
+</details>
               {% endif %}
             </div>
           </article>
@@ -65,37 +120,9 @@
         </div>
       </section>
 
-      {% if open_shift_rows %}
-      <section class="staff-card">
-        <details class="staff-secondary-details">
-          <summary>Extra shifts available</summary>
-          <div class="staff-shift-list">
-          {% for row in open_shift_rows %}
-            <article class="staff-shift open">
-              <div class="shift-date"><strong>{{ row.shift.date|date:"D" }}</strong><span>{{ row.shift.date|date:"d M" }}</span></div>
-              <div class="shift-main"><strong>{{ row.shift.display_time }}</strong><span>{{ row.shift.get_department_display }}</span></div>
-              <div class="shift-actions">{% if row.request.status == "requested" %}<span class="response-badge">Requested</span>{% else %}<form method="post" action="{% url 'roster:staff_open_shift_request' row.shift.pk %}">{% csrf_token %}<button class="mini-btn">I'd like this shift</button></form>{% endif %}</div>
-            </article>
-          {% endfor %}
-          </div>
-        </details>
-      </section>
-      {% endif %}
 
-      <section class="staff-card">
-        <details class="staff-secondary-details">
-          <summary>Tell us when you can't work</summary>
-          <p class="muted">Your normal pattern applies unless you tell us about a specific date.</p>
-          <form method="post" action="{% url 'roster:staff_availability' %}" class="availability-form">{% csrf_token %}
-            <label>Date<input type="date" name="date" min="{{ today|date:'Y-m-d' }}" required></label>
-            <label>Change<select name="mode" id="availability-mode"><option value="unavailable">Not available all day</option><option value="window">Available only between...</option><option value="clear">Use my normal availability</option></select></label>
-            <div class="availability-times" id="availability-times" hidden><label>From<input type="time" name="available_from"></label><label>Until<input type="time" name="available_until"></label></div>
-            <label>Note<input type="text" name="note" maxlength="250" placeholder="Optional"></label>
-            <button class="staff-primary" type="submit">Save</button>
-          </form>
-          {% if availability_exceptions %}<div class="exception-list"><h3>Upcoming changes</h3>{% for item in availability_exceptions %}<div><strong>{{ item.date|date:"D d M" }}</strong><span>{% if item.unavailable %}Not available{% else %}Available {{ item.available_from|time:"H:i" }}–{{ item.available_until|time:"H:i" }}{% endif %}{% if item.note %} · {{ item.note }}{% endif %}</span></div>{% endfor %}</div>{% endif %}
-        </details>
-      </section>
+
+
     </div>
 
     <form method="post" class="staff-reset">{% csrf_token %}<input type="hidden" name="reset_staff_session" value="yes"><button type="submit">Not {{ employee.full_name }}? Start again</button></form>

@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-header">
+  <div>
+    <h1>Clocking patterns</h1>
+    <p class="muted">
+      Use recent exports from the clocking system to improve normal
+      hours, working days and part-time patterns.
+    </p>
+  </div>
+
+  <div class="actions">
+    <a class="btn" href="{% url 'roster:learn' %}">Back to Learning</a>
+    <a class="btn" href="{% url 'roster:patterns' %}">Normal week</a>
+  </div>
+</div>
+
+
+<div class="card">
+  <h2>Import clocking data</h2>
+
+  <p>
+    This tells the roster system how much and how regularly people
+    actually work.
+  </p>
+
+  <p class="muted">
+    It does <strong>not</strong> change Restaurant, Bar or Kitchen
+    eligibility. Departments continue to come from roster history
+    and manager-approved rules.
+  </p>
+
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+
+    <div style="display:grid; gap:18px; max-width:700px;">
+
+      <label>
+        <strong>Employee roster patterns CSV</strong><br>
+        <span class="muted">
+          Overall weeks, shifts and working hours.
+        </span><br><br>
+        <input
+          type="file"
+          name="roster_patterns"
+          accept=".csv,text/csv"
+          required
+        >
+      </label>
+
+      <label>
+        <strong>Employee day patterns CSV</strong><br>
+        <span class="muted">
+          Which weekdays and times each employee normally works.
+        </span><br><br>
+        <input
+          type="file"
+          name="day_patterns"
+          accept=".csv,text/csv"
+          required
+        >
+      </label>
+
+      <div>
+        <button class="btn primary" type="submit">
+          Import clocking patterns
+        </button>
+      </div>
+
+    </div>
+  </form>
+</div>
+
+
+{% if latest %}
+<div class="card">
+  <h2>Latest import</h2>
+
+  <p>
+    <strong>{{ latest.created_at|date:"j M Y H:i" }}</strong>
+  </p>
+
+  <p class="muted">
+    {{ latest.notes }}
+  </p>
+</div>
+{% endif %}
+
+
+<div class="card">
+  <div class="page-header">
+    <div>
+      <h2>Learned working patterns</h2>
+      <p class="muted">
+        These describe overall working behaviour, not department.
+      </p>
+    </div>
+  </div>
+
+  {% if clocking_patterns %}
+
+  <div style="overflow-x:auto;">
+    <table style="width:100%; border-collapse:collapse;">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:10px;">Employee</th>
+          <th style="text-align:left;padding:10px;">Type</th>
+          <th style="text-align:left;padding:10px;">Weeks</th>
+          <th style="text-align:left;padding:10px;">Typical week</th>
+          <th style="text-align:left;padding:10px;">Confidence</th>
+        </tr>
+      </thead>
+
+      <tbody>
+      {% for p in clocking_patterns %}
+        <tr style="border-top:1px solid #ddd;">
+          <td style="padding:10px;">
+            <strong>{{ p.employee.full_name }}</strong>
+          </td>
+
+          <td style="padding:10px;">
+            {{ p.get_worker_type_display }}
+          </td>
+
+          <td style="padding:10px;">
+            {{ p.active_weeks }}/{{ p.weeks_observed }}
+          </td>
+
+          <td style="padding:10px;">
+            {{ p.average_shifts_per_active_week }} shifts /
+            {{ p.average_weekly_hours }}h
+          </td>
+
+          <td style="padding:10px;">
+            {{ p.confidence }}%
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% else %}
+
+  <p class="muted">
+    No clocking patterns imported yet.
+  </p>
+
+  {% endif %}
+</div>
+
+{% endblock %}

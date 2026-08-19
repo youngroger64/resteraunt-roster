@@ -1,5 +1,151 @@
 {% extends "base.html" %}
 {% block content %}
+
+
+<div class="card" style="margin-bottom:20px;">
+  <h2>Quick edits</h2>
+  <p class="muted">
+    Change a person or shift time without rebuilding the roster.
+  </p>
+
+  <details>
+    <summary style="cursor:pointer;">
+      Edit a shift
+    </summary>
+
+    <div style="margin-top:14px;">
+      {% for shift in roster.shifts.all %}
+        <div style="
+          display:flex;
+          justify-content:space-between;
+          align-items:center;
+          gap:14px;
+          padding:10px 0;
+          border-top:1px solid #ddd;
+        ">
+          <div>
+            <strong>{{ shift.employee.full_name }}</strong><br>
+            <span class="muted">
+              {{ shift.date|date:"D j M" }}
+              ·
+              {{ shift.start_time|time:"H:i" }}–{{ shift.end_time|time:"H:i" }}
+            </span>
+          </div>
+
+          <a
+            class="btn"
+            href="{% url 'roster:edit_shift' roster.pk shift.pk %}"
+          >
+            Edit
+          </a>
+        </div>
+      {% endfor %}
+    </div>
+  </details>
+</div>
+
+
+
+{% if copied_issues %}
+<div class="card" style="margin-bottom:20px;">
+  <h2>{{ copied_issues|length }} shift{{ copied_issues|length|pluralize }} need attention</h2>
+
+  <p class="muted">
+    Everything else has been kept from the previous roster.
+  </p>
+
+  {% for issue in copied_issues %}
+    <div style="
+      padding:14px 0;
+      border-top:1px solid #ddd;
+    ">
+      <strong>
+        {{ issue.employee }} —
+        {{ issue.date }}
+      </strong>
+
+      <div>
+        {{ issue.start }}–{{ issue.end }}
+      </div>
+
+      <div class="muted">
+        {{ issue.reason }}
+      </div>
+
+      {% if issue.suggestions %}
+        <div style="margin-top:14px;">
+          <div class="muted">Best replacement</div>
+
+          {% with best=issue.suggestions.0 %}
+            <strong>{{ best.employee }}</strong>
+
+            {% if best.reasons %}
+              <div class="muted" style="margin-top:4px;">
+                {{ best.reasons|join:", " }}
+              </div>
+            {% endif %}
+
+            <form
+              method="post"
+              action="{% url 'roster:use_replacement' roster.pk issue.shift_id %}"
+              style="margin-top:10px;"
+            >
+              {% csrf_token %}
+              <input
+                type="hidden"
+                name="employee_id"
+                value="{{ best.employee_id }}"
+              >
+              <button class="btn primary" type="submit">
+                Use {{ best.employee }}
+              </button>
+            </form>
+          {% endwith %}
+
+          {% if issue.suggestions|length > 1 %}
+            <details style="margin-top:12px;">
+              <summary style="cursor:pointer;">
+                Other options
+              </summary>
+
+              <div style="margin-top:10px;">
+                {% for option in issue.suggestions|slice:"1:" %}
+                  <form
+                    method="post"
+                    action="{% url 'roster:use_replacement' roster.pk issue.shift_id %}"
+                    style="margin:8px 0;"
+                  >
+                    {% csrf_token %}
+
+                    <input
+                      type="hidden"
+                      name="employee_id"
+                      value="{{ option.employee_id }}"
+                    >
+
+                    <button class="btn" type="submit">
+                      {{ option.employee }}
+                    </button>
+                  </form>
+                {% endfor %}
+              </div>
+            </details>
+          {% endif %}
+        </div>
+
+      {% else %}
+
+        <div style="margin-top:12px;">
+          <strong>No simple replacement found.</strong>
+        </div>
+
+      {% endif %}
+    </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+
 <div class="page-header print-hide compact-header simplified-roster-header">
   <div>
     <h1>{{ roster }}</h1>
@@ -7,13 +153,23 @@
   </div>
   <div class="actions primary-roster-actions">
     {% if roster.status == "draft" and roster.purpose == "weekly" %}
-      <form method="post" action="{% url 'roster:regenerate' roster.pk %}" onsubmit="return confirm('Regenerate this draft using current availability and normal-week rules?')">{% csrf_token %}<button class="btn">Regenerate</button></form>
-      <form method="post" action="{% url 'roster:publish' roster.pk %}">{% csrf_token %}<button class="btn primary">Publish roster</button></form>
+      <form method="post" action="{% url 'roster:publish' roster.pk %}">
+        {% csrf_token %}
+        <button class="btn primary">Publish roster</button>
+      </form>
     {% endif %}
     <details class="manager-more"><summary class="btn">More</summary><div class="manager-more-menu">
       {% if show_all %}<a href="{% url 'roster:detail' roster.pk %}">Working only</a>{% else %}<a href="?show=all">Show all employees</a>{% endif %}
       <button type="button" onclick="window.print()">Print</button>
       <a href="{% url 'roster:excel' roster.pk %}">Excel</a>
+      {% if roster.status == "draft" and roster.purpose == "weekly" %}
+        <form method="post"
+              action="{% url 'roster:regenerate' roster.pk %}"
+              onsubmit="return confirm('Start this draft again? Your current draft shifts will be replaced.')">
+          {% csrf_token %}
+          <button type="submit">Regenerate draft</button>
+        </form>
+      {% endif %}
       {% if roster.status == "draft" %}<a href="{% url 'roster:delete' roster.pk %}" class="danger-link">Delete draft</a>{% endif %}
     </div></details>
   </div>
@@ -69,6 +225,146 @@
 </section>
 {% endif %}
 
+
+{% if replacement_hour_requests %}
+<section class="card print-hide replacement-hours-card">
+  <h2>Would like hours</h2>
+
+  <p class="muted">
+    Optional. Their original shift is already covered.
+  </p>
+
+  {% for item in replacement_hour_requests %}
+    <article class="attention-item">
+
+      <div class="attention-summary">
+        <strong>
+          {{ item.employee.full_name }} would like another shift
+        </strong>
+
+        <span>
+          Gave up {{ item.lost_shifts|length }}
+          shift{% if item.lost_shifts|length != 1 %}s{% endif %}
+          · {{ item.lost_hours|floatformat:1 }} hours
+        </span>
+      </div>
+
+      {% if item.good_matches %}
+        <div style="margin-top:14px;">
+          <strong>Good match</strong>
+
+          {% for option in item.good_matches %}
+            <div class="candidate-card" style="margin-top:10px;">
+              <div class="candidate-copy">
+
+                <strong>
+                  {{ option.shift.date|date:"D d M" }}
+                  · {{ option.shift.display_time }}
+                </strong>
+
+                <div class="muted">
+                  {{ option.shift.get_department_display }}
+                </div>
+
+                {% for reason in option.reasons %}
+                  <div class="muted">
+                    {{ reason }}
+                  </div>
+                {% endfor %}
+
+                {% if option.shift.end_time <= option.shift.start_time %}
+                  <div class="muted">
+                    {% if option.shift.end_time|time:"H:i" == "00:00" %}
+                      Finishes midnight
+                    {% else %}
+                      Finishes {{ option.shift.end_time|time:"H:i" }} next day
+                    {% endif %}
+                  </div>
+                {% endif %}
+              </div>
+
+              <form method="post"
+                    action="{% url 'roster:give_replacement_open_shift' roster.pk item.response.pk option.shift.pk %}">
+                {% csrf_token %}
+                <button class="btn primary" type="submit">
+                  Give shift
+                </button>
+              </form>
+            </div>
+          {% endfor %}
+        </div>
+
+      {% else %}
+        <p style="margin-top:14px;">
+          <strong>No good replacement shift right now.</strong>
+        </p>
+      {% endif %}
+
+
+      {% if item.other_possible %}
+        <details style="margin-top:14px;">
+          <summary>
+            Other possible shifts ({{ item.other_possible|length }})
+          </summary>
+
+          <div style="margin-top:10px;">
+            {% for option in item.other_possible %}
+              <div class="candidate-card" style="margin-top:10px;">
+
+                <div class="candidate-copy">
+                  <strong>
+                    {{ option.shift.date|date:"D d M" }}
+                    · {{ option.shift.display_time }}
+                  </strong>
+
+                  <div class="muted">
+                    {{ option.shift.get_department_display }}
+                  </div>
+
+                  <div class="muted">
+                    Available, but not their usual shift time
+                  </div>
+
+                  {% if option.shift.end_time <= option.shift.start_time %}
+                    <div class="muted">
+                      {% if option.shift.end_time|time:"H:i" == "00:00" %}
+                        Finishes midnight
+                      {% else %}
+                        Finishes {{ option.shift.end_time|time:"H:i" }} next day
+                      {% endif %}
+                    </div>
+                  {% endif %}
+                </div>
+
+                <form method="post"
+                      action="{% url 'roster:give_replacement_open_shift' roster.pk item.response.pk option.shift.pk %}">
+                  {% csrf_token %}
+                  <button class="btn" type="submit">
+                    Give shift
+                  </button>
+                </form>
+
+              </div>
+            {% endfor %}
+          </div>
+        </details>
+      {% endif %}
+
+
+      <form method="post"
+            action="{% url 'roster:dismiss_replacement_hours' roster.pk item.response.pk %}"
+            style="margin-top:14px;">
+        {% csrf_token %}
+        <button class="btn" type="submit">
+          Dismiss
+        </button>
+      </form>
+
+    </article>
+  {% endfor %}
+</section>
+{% endif %}
+
 {% if open_shift_groups %}
 <section class="card open-shifts-card print-hide">
   <h2>Needs attention</h2>
@@ -113,7 +409,7 @@
   {% for day in days %}
     <th>{{ day|date:"D" }}<small>{{ day|date:"d M" }}</small></th>
   {% endfor %}
-  <th>Hrs / target</th>
+  <th>Hours</th>
 </tr>
 </thead>
 <tbody>
@@ -168,20 +464,12 @@
   </td>
   {% endfor %}
 
-  <td class="hours target-hours">
-  <strong>{{ row.hours }}</strong>
-  {% if row.target_hours %}
-    <small>/ {{ row.target_hours }} target</small>
-  {% endif %}
-  {% if row.payroll_target_hours %}
-    <small class="payroll-total">Historic payroll avg {{ row.payroll_target_hours }}</small>
-  {% endif %}
-  {% if row.allocation_status %}
-    <span class="allocation-status allocation-{{ row.allocation_status|slugify }}">
-      {{ row.allocation_status }}
-    </span>
-  {% endif %}
-</td>
+  <td class="hours target-hours simple-hours">
+    <strong>{{ row.hours }}h</strong>
+    {% if row.target_hours %}
+      <small>usual {{ row.target_hours }}h</small>
+    {% endif %}
+  </td>
 </tr>
 {% endfor %}
 {% endfor %}

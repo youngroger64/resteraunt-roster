@@ -1,70 +1,116 @@
 {% extends "base.html" %}
 {% block content %}
+
 <div class="page-header">
   <div>
-    <h1>Generate roster</h1>
+    <h1>Prepare next week</h1>
     <p class="muted">
-      Generate a new draft, or replace an existing draft for the same week.
+      Start with the last roster and change only what needs changing.
     </p>
   </div>
 </div>
 
+
 {% if existing_roster %}
-<div class="card form-card existing-roster-choice">
+
+<div class="card form-card">
   <h2>{{ existing_roster }} already exists</h2>
 
   {% if published_existing or existing_roster.status == "published" %}
-    <p>This roster is published and will not be overwritten.</p>
+
+    <p>This roster has already been published.</p>
+
     <div class="actions">
-      <a class="btn primary"
-         href="{% url 'roster:detail' existing_roster.pk %}">
-        Open published roster
+      <a
+        class="btn primary"
+        href="{% url 'roster:detail' existing_roster.pk %}"
+      >
+        Open roster
       </a>
-      <a class="btn"
-         href="{% url 'roster:generate_patterns' %}">
+
+      <a
+        class="btn"
+        href="{% url 'roster:generate_patterns' %}"
+      >
         Choose another week
       </a>
     </div>
+
   {% else %}
-    <p>Choose what happens:</p>
 
-    <div class="choice-grid">
-      <a class="choice-card"
-         href="{% url 'roster:detail' existing_roster.pk %}">
-        <strong>Open existing draft</strong>
-        <span>Keep its current shifts and choices.</span>
+    <p class="muted">
+      You already have a draft for this week.
+    </p>
+
+    <div class="actions">
+      <a
+        class="btn primary"
+        href="{% url 'roster:detail' existing_roster.pk %}"
+      >
+        Open existing draft
       </a>
 
-      <form method="post" class="choice-card danger-lite"
-            onsubmit="return confirm('Replace every shift in this draft?')">
+      <form
+        method="post"
+        style="display:inline;"
+        onsubmit="return confirm('Replace this draft with a fresh copy of the previous roster?')"
+      >
         {% csrf_token %}
-        <input type="hidden"
-               name="week_start"
-               value="{{ form.week_start.value|date:'Y-m-d' }}">
-        <input type="hidden"
-               name="uncertain_choice"
-               value="{{ form.uncertain_choice.value }}">
-        <input type="hidden"
-               name="replace_existing"
-               value="yes">
-        <strong>Replace and regenerate</strong>
-        <span>Delete this draft's shifts and generate it again.</span>
-        <button class="btn primary">Replace draft</button>
-      </form>
 
-      <a class="choice-card"
-         href="{% url 'roster:generate_patterns' %}">
-        <strong>Choose another week</strong>
-        <span>Leave this draft unchanged.</span>
-      </a>
+        <input
+          type="hidden"
+          name="week_start"
+          value="{{ form.week_start.value }}"
+        >
+
+        <input
+          type="hidden"
+          name="replace_existing"
+          value="yes"
+        >
+
+        <button class="btn" type="submit">
+          Start again from last roster
+        </button>
+      </form>
     </div>
+
   {% endif %}
 </div>
+
+
 {% else %}
+
 <form method="post" class="card form-card">
   {% csrf_token %}
-  {{ form.as_p }}
-  <button class="btn primary">Generate draft</button>
+
+  <label>
+    <strong>Week begins</strong>
+    {{ form.week_start }}
+  </label>
+
+  {% if source_roster %}
+    <div style="margin-top:24px;">
+      <div class="muted">Starting from</div>
+      <strong>{{ source_roster }}</strong>
+    </div>
+
+    <p class="muted" style="margin-top:8px;">
+      Staff and shift times will stay the same unless something needs attention.
+    </p>
+  {% else %}
+    <p class="muted" style="margin-top:20px;">
+      Choose the week first and the app will use the most recent earlier roster.
+    </p>
+  {% endif %}
+
+  <div style="margin-top:24px;">
+    <button class="btn primary" type="submit">
+      Prepare next week
+    </button>
+  </div>
 </form>
+
 {% endif %}
+
 {% endblock %}

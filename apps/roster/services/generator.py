@@ -367,9 +367,20 @@ def hours_target_score(pattern, current_hours, proposed_hours, department=None):
 
 
 def effective_priority_ratio(pattern, current_hours, department=None):
+    """
+    Measure how much of this employee's normal allocation has already
+    been used.
+
+    Low-hours and one-shift-per-week employees are valid scheduling
+    patterns. They must be compared with their own normal target rather
+    than treated as undesirable just because their target is below
+    eight hours.
+    """
     average = target_hours(pattern, department)
-    if average < 8:
+
+    if average <= 0:
         return 9.0
+
     return current_hours / average
 
 
@@ -546,6 +557,69 @@ def candidate_reasons(
 
     return reasons[:3]
 
+
+def clocking_pattern_adjustment(pattern, weekday, current_hours):
+    """
+    Use clocking history as a soft ranking signal only.
+
+    Clocking data describes overall working behaviour. It must never grant
+    Restaurant or Bar eligibility; department eligibility is handled before
+    this adjustment is applied.
+    """
+    try:
+        clocking = pattern.employee.clocking_pattern
+    except Exception:
+        return 0
+
+    adjustment = 0
+
+    day_key = DAY_KEYS[weekday]
+    day_info = (clocking.weekday_counts or {}).get(day_key, {})
+
+    probability = float(day_info.get("probability", 0) or 0)
+    weeks_worked = int(day_info.get("weeks_worked", 0) or 0)
+
+    # Strong recurring weekday evidence is useful even for someone who only
+    # works one shift per week.
+    if probability >= 70:
+        adjustment += 24
+    elif probability >= 50:
+        adjustment += 16
+    elif probability >= 30:
+        adjustment += 8
+
+    if weeks_worked >= 4:
+        adjustment += 8
+    elif weeks_worked >= 2:
+        adjustment += 4
+
+    worker_type = clocking.worker_type
+
+    if worker_type == "core":
+        adjustment += 5
+    elif worker_type == "regular_part_time":
+        adjustment += 10
+    elif worker_type == "occasional":
+        # Occasional does not mean undesirable. A matching occasional worker
+        # is often exactly who should receive one short weekly shift.
+        adjustment += 4
+    elif worker_type == "insufficient":
+        adjustment -= 8
+
+    # Reward employees who have not yet received their normal department
+    # allocation. We intentionally use the Restaurant/Bar learned target here,
+    # not clocking hours, because clocking may include Kitchen work.
+    department_target = target_hours(pattern)
+    if department_target > 0:
+        completion = current_hours / department_target
+        if completion < 0.50:
+            adjustment += 8
+        elif completion >= 1.0:
+            adjustment -= 8
+
+    return adjustment
+
+
 def rank_candidates(
     roster,
     patterns,
@@ -582,6 +656,15 @@ def rank_candidates(
         if score <= -999:
             continue
 
+        score += clocking_pattern_adjustment(
+            pattern=pattern,
+            weekday=weekday,
+            current_hours=current_hours.get(
+                (pattern.employee_id, department),
+                0.0,
+            ),
+        )
+
         ranked.append(
             {
                 "score": score,
@@ -602,6 +685,7 @@ def rank_candidates(
 
     ranked.sort(
         key=lambda item: (
+            item["score"],
             -effective_priority_ratio(
                 item["pattern"],
                 current_hours.get(
@@ -613,11 +697,7 @@ def rank_candidates(
                 ),
                 department,
             ),
-            target_hours(
-                item["pattern"],
-                department,
-            ),
-            item["score"],
+            item["pattern"].consistency,
         ),
         reverse=True,
     )
@@ -1687,6 +1767,162 @@ def generate_business_roster(target: RosterWeek, uncertain_threshold=75):
 
 
 @transaction.atomic
+
+
+def replacement_suggestions_for_shift(roster, shift, limit=5):
+    """
+    Rank sensible replacements for an existing real shift.
+
+    The shift itself is never changed here. We only decide who could
+    reasonably work the exact same department/date/time.
+    """
+    patterns = list(
+        EmployeePattern.objects
+        .select_related("employee", "employee__schedule_profile")
+        .filter(employee__is_active=True)
+    )
+
+    patterns = [
+        pattern
+        for pattern in patterns
+        if pattern.employee_id != shift.employee_id
+        and automatic_department_eligible(
+            pattern,
+            shift.department,
+        )
+    ]
+
+    # Build the same shift signature used by the ranking engine.
+    signature = (
+        f"{shift.start_time.strftime('%H:%M')}-"
+        f"{shift.end_time.strftime('%H:%M')}"
+    )
+
+    current_hours = {}
+    current_days = {}
+
+    for existing in roster.shifts.select_related("employee").all():
+        # Ignore the problem shift itself when calculating the roster.
+        if existing.pk == shift.pk:
+            continue
+
+        key = (existing.employee_id, existing.department)
+
+        current_hours[key] = (
+            current_hours.get(key, 0.0)
+            + float(existing.duration_hours)
+        )
+
+        day_key = (
+            existing.employee_id,
+            existing.department,
+            existing.date,
+        )
+
+        current_days[day_key] = True
+
+    days_by_employee = {}
+
+    for employee_id, department, shift_date in current_days:
+        key = (employee_id, department)
+        days_by_employee.setdefault(key, set()).add(shift_date)
+
+    current_day_counts = {
+        key: len(days)
+        for key, days in days_by_employee.items()
+    }
+
+    ranked = rank_candidates(
+        roster=roster,
+        patterns=patterns,
+        weekday=shift.date.weekday(),
+        department=shift.department,
+        signature=signature,
+        current_hours=current_hours,
+        current_days=current_day_counts,
+        shift_date=shift.date,
+    )
+
+    suggestions = []
+
+    for item in ranked[:limit]:
+        employee = item["pattern"].employee
+
+        suggestions.append(
+            {
+                "employee_id": employee.pk,
+                "employee": employee.full_name,
+                "reasons": item["reasons"],
+            }
+        )
+
+    return suggestions
+
+
+def copied_shift_availability_issues(roster):
+    """
+    Check copied shifts against dated availability exceptions.
+
+    This does not invent shifts, move employees, or alter hours.
+    It simply reports copied shifts that the employee cannot work
+    as originally scheduled.
+    """
+    from apps.roster.models import AvailabilityException
+
+    issues = []
+
+    exceptions = {
+        (item.employee_id, item.date): item
+        for item in AvailabilityException.objects.filter(
+            date__gte=roster.week_start,
+            date__lte=roster.week_end,
+        )
+    }
+
+    for shift in roster.shifts.select_related("employee").all():
+        exception = exceptions.get(
+            (shift.employee_id, shift.date)
+        )
+
+        if exception is None:
+            continue
+
+        reason = None
+
+        if exception.unavailable:
+            reason = exception.note or "Employee cannot work this day."
+
+        elif (
+            exception.available_from
+            and exception.available_until
+            and (
+                shift.start_time < exception.available_from
+                or shift.end_time > exception.available_until
+            )
+        ):
+            reason = (
+                f"Employee is only available "
+                f"{exception.available_from:%H:%M}–"
+                f"{exception.available_until:%H:%M}."
+            )
+
+        if reason:
+            issues.append(
+                {
+                    "shift_id": shift.pk,
+                    "employee": str(shift.employee),
+                    "employee_id": shift.employee_id,
+                    "date": shift.date.isoformat(),
+                    "department": shift.department,
+                    "start": shift.start_time.strftime("%H:%M"),
+                    "end": shift.end_time.strftime("%H:%M"),
+                    "reason": reason,
+                }
+            )
+
+    return issues
+
+
 def copy_roster(source: RosterWeek, target: RosterWeek) -> int:
     day_delta = target.week_start - source.week_start
     copied_shifts = []

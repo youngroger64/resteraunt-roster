@@ -423,6 +423,28 @@ class AvailabilityException(TimeStampedModel):
         return f"{self.employee} availability note {self.date}"
 
 
+
+class StaffRosterNotice(TimeStampedModel):
+    employee = models.ForeignKey(
+        Employee,
+        on_delete=models.CASCADE,
+        related_name="roster_notices",
+    )
+    roster_week = models.ForeignKey(
+        RosterWeek,
+        on_delete=models.CASCADE,
+        related_name="staff_notices",
+    )
+    message = models.CharField(max_length=250)
+    seen_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.employee}: {self.message}"
+
+
 class ShiftResponseStatus(models.TextChoices):
     SEEN = "seen", "Seen"
     CONFIRMED = "confirmed", "Confirmed"
@@ -441,6 +463,10 @@ class ShiftResponse(TimeStampedModel):
         default=ShiftResponseStatus.SEEN,
     )
     reason = models.CharField(max_length=250, blank=True)
+    wants_replacement_shift = models.BooleanField(
+        default=False,
+        help_text="Employee cannot work this shift but would like replacement hours.",
+    )
     resolved_at = models.DateTimeField(null=True, blank=True)
     resolved_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

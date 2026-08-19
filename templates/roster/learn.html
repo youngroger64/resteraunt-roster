@@ -1,5 +1,20 @@
 {% extends "base.html" %}
 {% block content %}
+
+<div class="card" style="margin-bottom:20px;">
+  <h2>Clocking data</h2>
+  <p>
+    Import recent clocking patterns to learn overall hours,
+    working days and regular part-time staff.
+  </p>
+  <p class="muted">
+    Clocking data does not decide Restaurant, Bar or Kitchen eligibility.
+  </p>
+  <a class="btn" href="{% url 'roster:clocking_import' %}">
+    Import clocking patterns
+  </a>
+</div>
+
 <div class="page-header">
   <div>
     <h1>Learn patterns</h1>
