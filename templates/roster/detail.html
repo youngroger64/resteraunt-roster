@@ -1,55 +1,21 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-header print-hide compact-header">
+<div class="page-header print-hide compact-header simplified-roster-header">
   <div>
     <h1>{{ roster }}</h1>
-    <p class="muted">
-      {{ scheduled_employee_count }} scheduled employees ·
-      {{ roster.get_status_display }}
-    </p>
+    <p class="muted">{{ scheduled_employee_count }} staff scheduled · {{ roster.get_status_display }}</p>
   </div>
-  <div class="actions">
-    {% if show_all %}
-      <a class="btn" href="{% url 'roster:detail' roster.pk %}">Working only</a>
-    {% else %}
-      <a class="btn" href="?show=all">Show all employees</a>
-    {% endif %}
-    <button class="btn" onclick="window.print()">Print</button>
-    <a class="btn" href="{% url 'roster:excel' roster.pk %}">Excel</a>
-
-{% if roster.status == "draft" %}
-<form method="post"
-      action="{% url 'roster:excel_import' roster.pk %}"
-      enctype="multipart/form-data"
-      class="excel-import-form">
-  {% csrf_token %}
-  <input type="file" name="workbook" accept=".xlsx" required>
-  <button class="btn">Import Excel</button>
-</form>
-{% endif %}
-
+  <div class="actions primary-roster-actions">
     {% if roster.status == "draft" and roster.purpose == "weekly" %}
-      <form method="post"
-            action="{% url 'roster:regenerate' roster.pk %}"
-            onsubmit="return confirm('Replace every shift in this draft?')">
-        {% csrf_token %}
-        <button class="btn">Regenerate</button>
-      </form>
+      <form method="post" action="{% url 'roster:regenerate' roster.pk %}" onsubmit="return confirm('Regenerate this draft using current availability and normal-week rules?')">{% csrf_token %}<button class="btn">Regenerate</button></form>
+      <form method="post" action="{% url 'roster:publish' roster.pk %}">{% csrf_token %}<button class="btn primary">Publish roster</button></form>
     {% endif %}
-
-    {% if roster.status != "published" %}
-      <a class="btn danger"
-         href="{% url 'roster:delete' roster.pk %}">
-        Delete
-      </a>
-    {% endif %}
-
-    {% if roster.status == "draft" and roster.purpose == "weekly" %}
-      <form method="post" action="{% url 'roster:publish' roster.pk %}">
-        {% csrf_token %}
-        <button class="btn primary">Publish</button>
-      </form>
-    {% endif %}
+    <details class="manager-more"><summary class="btn">More</summary><div class="manager-more-menu">
+      {% if show_all %}<a href="{% url 'roster:detail' roster.pk %}">Working only</a>{% else %}<a href="?show=all">Show all employees</a>{% endif %}
+      <button type="button" onclick="window.print()">Print</button>
+      <a href="{% url 'roster:excel' roster.pk %}">Excel</a>
+      {% if roster.status == "draft" %}<a href="{% url 'roster:delete' roster.pk %}" class="danger-link">Delete draft</a>{% endif %}
+    </div></details>
   </div>
 </div>
 
@@ -62,10 +28,51 @@
 
 
 
+{% if shift_change_requests or open_shift_requests %}
+<section class="card manager-attention print-hide">
+  <h2>Staff requests</h2>
+  <p class="muted">Published shifts stay assigned until you approve a change.</p>
+
+  {% for item in shift_change_requests %}
+    <article class="attention-item">
+      <div class="attention-summary">
+        <strong>{{ item.response.employee.full_name }} can't work</strong>
+        <span>{{ item.shift.date|date:"D d M" }} · {{ item.shift.start_time|time:"H:i" }}–{{ item.shift.end_time|time:"H:i" }} · {{ item.shift.get_department_display }}</span>
+        {% if item.response.reason %}<small>“{{ item.response.reason }}”</small>{% endif %}
+      </div>
+      {% if item.choices %}
+      <div class="ranked-candidates">
+        {% for choice in item.choices %}
+        <div class="candidate-card">
+          <div class="candidate-rank">{{ forloop.counter }}</div>
+          <div class="candidate-copy"><strong>{{ choice.name }}</strong>{% if choice.reasons %}<ul class="candidate-reasons">{% for reason in choice.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}</div>
+          <form method="post" action="{% url 'roster:replace_requested_shift' roster.pk item.response.pk choice.employee_id %}">{% csrf_token %}<button class="btn {% if forloop.first %}primary{% endif %}">Move shift</button></form>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}<div class="alert warning">No learned-pattern candidate is currently available. Use the roster grid to rearrange manually.</div>{% endif %}
+    </article>
+  {% endfor %}
+
+  {% for req in open_shift_requests %}
+    <article class="attention-item open-request-item">
+      <div class="attention-summary">
+        <strong>{{ req.employee.full_name }} wants an open shift</strong>
+        <span>{{ req.open_shift.date|date:"D d M" }} · {{ req.open_shift.display_time }} · {{ req.open_shift.get_department_display }}</span>
+      </div>
+      <div class="actions">
+        <form method="post" action="{% url 'roster:approve_open_shift_request' roster.pk req.pk %}">{% csrf_token %}<button class="btn primary">Approve</button></form>
+        <form method="post" action="{% url 'roster:decline_open_shift_request' roster.pk req.pk %}">{% csrf_token %}<button class="btn">Decline</button></form>
+      </div>
+    </article>
+  {% endfor %}
+</section>
+{% endif %}
+
 {% if open_shift_groups %}
 <section class="card open-shifts-card print-hide">
-  <h2>Needs a choice</h2>
-  <p class="muted">Suggestions are recalculated from the current roster whenever this page opens.</p>
+  <h2>Needs attention</h2>
+  <p class="muted">Only shifts the system could not safely assign appear here.</p>
   {% for group in open_shift_groups %}
     {% if group.items %}
     <div class="choice-department">
@@ -83,7 +90,7 @@
           </div>
           {% endfor %}
         </div>
-        {% else %}<div class="alert warning">No suitable employee is currently available.</div>{% endif %}
+        {% else %}<div class="alert warning">No safe eligible employee is currently available. This one needs a manager decision.</div>{% endif %}
         {% if item.other_available %}
         <details class="other-employees"><summary>Other available employees ({{ item.other_available|length }})</summary>
           <form method="post" action="{% url 'roster:assign_open_shift' roster.pk item.shift.pk %}">{% csrf_token %}<select name="employee_id" required><option value="">Choose employee</option>{% for employee in item.other_available %}<option value="{{ employee.pk }}">{{ employee.full_name }}</option>{% endfor %}</select><button class="btn">Assign</button></form>
@@ -164,10 +171,10 @@
   <td class="hours target-hours">
   <strong>{{ row.hours }}</strong>
   {% if row.target_hours %}
-    <small>/ {{ row.target_hours }} area</small>
+    <small>/ {{ row.target_hours }} target</small>
   {% endif %}
   {% if row.payroll_target_hours %}
-    <small class="payroll-total">Payroll avg {{ row.payroll_target_hours }}</small>
+    <small class="payroll-total">Historic payroll avg {{ row.payroll_target_hours }}</small>
   {% endif %}
   {% if row.allocation_status %}
     <span class="allocation-status allocation-{{ row.allocation_status|slugify }}">

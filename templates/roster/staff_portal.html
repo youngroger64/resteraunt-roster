@@ -1,0 +1,126 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Staff Clock</title>
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+</head>
+<body class="staff-body">
+<div class="staff-shell">
+  <header class="staff-header">
+    <div><strong>Staff</strong><span>Clock</span></div>
+    {% if employee %}<span class="staff-name">{{ employee.full_name }}</span>{% endif %}
+  </header>
+
+  {% if messages %}{% for message in messages %}<div class="alert {{ message.tags }}">{{ message }}</div>{% endfor %}{% endif %}
+
+  {% if not employee %}
+    <section class="staff-card identify-card">
+      <h1>Welcome</h1>
+      <p>Enter your employee number.</p>
+      <form method="post">{% csrf_token %}
+        <label>Employee number</label>
+        <input class="staff-input" type="text" name="employee_number" inputmode="numeric" required autofocus>
+        <button class="staff-primary" type="submit">Continue</button>
+      </form>
+      <p class="staff-test-note">Testing only: this uses the roster app employee ID. The live clocking app will keep its existing PIN/security flow.</p>
+    </section>
+  {% else %}
+    <section id="clock" class="staff-card staff-clock-primary">
+      <div class="section-heading"><div><h1>Clock</h1></div><span class="test-pill">TEST ONLY</span></div>
+      <div class="clock-state-card">
+        <strong>{{ employee.full_name }}</strong>
+        <span>{% if test_clock_state == "CLOCKED_OUT" %}Clocked Out{% elif test_clock_state == "ON_BREAK" %}On Break{% else %}Working{% endif %}</span>
+      </div>
+      <form method="post" class="clock-buttons">{% csrf_token %}
+        {% if "IN" in clock_actions %}<button name="clock_action" value="IN" class="staff-primary">Clock In</button>{% endif %}
+        {% if "BREAK_START" in clock_actions %}<button name="clock_action" value="BREAK_START" class="staff-break">Start Break</button>{% endif %}
+        {% if "BREAK_END" in clock_actions %}<button name="clock_action" value="BREAK_END" class="staff-break">End Break</button>{% endif %}
+        {% if "OUT" in clock_actions %}<button name="clock_action" value="OUT" class="staff-dark">Clock Out</button>{% endif %}
+      </form>
+      <p class="staff-test-note">Clock actions are session-only in this test project and do not affect payroll.</p>
+    </section>
+
+    <button type="button" class="staff-roster-toggle" id="roster-toggle" aria-expanded="false" aria-controls="staff-roster-panel">View my roster</button>
+
+    <div id="staff-roster-panel" class="staff-roster-panel" hidden>
+      <section class="staff-card">
+        <div class="section-heading"><div><h2>My upcoming shifts</h2><p>Only tell the manager if something is wrong.</p></div></div>
+        <div class="staff-shift-list">
+        {% for row in shift_rows %}
+          <article class="staff-shift simple-shift">
+            <div class="shift-date"><strong>{{ row.shift.date|date:"D" }}</strong><span>{{ row.shift.date|date:"d M" }}</span></div>
+            <div class="shift-main"><strong>{{ row.shift.start_time|time:"H:i" }}–{{ row.shift.end_time|time:"H:i" }}</strong><span>{{ row.shift.get_department_display }}</span>
+              {% if row.response.status == "cannot_work" %}<span class="response-badge problem">Manager notified</span>{% endif %}
+            </div>
+            <div class="shift-actions">
+              {% if row.response.status != "cannot_work" %}
+              <details><summary>I can't work this shift</summary><form method="post" action="{% url 'roster:staff_shift_response' row.shift.pk %}">{% csrf_token %}<input type="hidden" name="action" value="cannot_work"><input type="text" name="reason" maxlength="250" placeholder="Reason (optional)"><button class="mini-btn danger">Tell manager</button></form></details>
+              {% endif %}
+            </div>
+          </article>
+        {% empty %}<p class="empty-copy">No published upcoming shifts yet.</p>{% endfor %}
+        </div>
+      </section>
+
+      {% if open_shift_rows %}
+      <section class="staff-card">
+        <details class="staff-secondary-details">
+          <summary>Extra shifts available</summary>
+          <div class="staff-shift-list">
+          {% for row in open_shift_rows %}
+            <article class="staff-shift open">
+              <div class="shift-date"><strong>{{ row.shift.date|date:"D" }}</strong><span>{{ row.shift.date|date:"d M" }}</span></div>
+              <div class="shift-main"><strong>{{ row.shift.display_time }}</strong><span>{{ row.shift.get_department_display }}</span></div>
+              <div class="shift-actions">{% if row.request.status == "requested" %}<span class="response-badge">Requested</span>{% else %}<form method="post" action="{% url 'roster:staff_open_shift_request' row.shift.pk %}">{% csrf_token %}<button class="mini-btn">I'd like this shift</button></form>{% endif %}</div>
+            </article>
+          {% endfor %}
+          </div>
+        </details>
+      </section>
+      {% endif %}
+
+      <section class="staff-card">
+        <details class="staff-secondary-details">
+          <summary>Tell us when you can't work</summary>
+          <p class="muted">Your normal pattern applies unless you tell us about a specific date.</p>
+          <form method="post" action="{% url 'roster:staff_availability' %}" class="availability-form">{% csrf_token %}
+            <label>Date<input type="date" name="date" min="{{ today|date:'Y-m-d' }}" required></label>
+            <label>Change<select name="mode" id="availability-mode"><option value="unavailable">Not available all day</option><option value="window">Available only between...</option><option value="clear">Use my normal availability</option></select></label>
+            <div class="availability-times" id="availability-times" hidden><label>From<input type="time" name="available_from"></label><label>Until<input type="time" name="available_until"></label></div>
+            <label>Note<input type="text" name="note" maxlength="250" placeholder="Optional"></label>
+            <button class="staff-primary" type="submit">Save</button>
+          </form>
+          {% if availability_exceptions %}<div class="exception-list"><h3>Upcoming changes</h3>{% for item in availability_exceptions %}<div><strong>{{ item.date|date:"D d M" }}</strong><span>{% if item.unavailable %}Not available{% else %}Available {{ item.available_from|time:"H:i" }}–{{ item.available_until|time:"H:i" }}{% endif %}{% if item.note %} · {{ item.note }}{% endif %}</span></div>{% endfor %}</div>{% endif %}
+        </details>
+      </section>
+    </div>
+
+    <form method="post" class="staff-reset">{% csrf_token %}<input type="hidden" name="reset_staff_session" value="yes"><button type="submit">Not {{ employee.full_name }}? Start again</button></form>
+  {% endif %}
+</div>
+<script>
+(function () {
+  const toggle = document.getElementById('roster-toggle');
+  const panel = document.getElementById('staff-roster-panel');
+  if (toggle && panel) {
+    toggle.addEventListener('click', function () {
+      const opening = panel.hidden;
+      panel.hidden = !opening;
+      toggle.setAttribute('aria-expanded', opening ? 'true' : 'false');
+      toggle.textContent = opening ? 'Hide my roster' : 'View my roster';
+      if (opening) panel.scrollIntoView({behavior: 'smooth', block: 'start'});
+    });
+  }
+  const mode = document.getElementById('availability-mode');
+  const times = document.getElementById('availability-times');
+  if (mode && times) {
+    const sync = function () { times.hidden = mode.value !== 'window'; };
+    mode.addEventListener('change', sync); sync();
+  }
+})();
+</script>
+</body>
+</html>

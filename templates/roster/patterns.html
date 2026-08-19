@@ -2,62 +2,40 @@
 {% block content %}
 <div class="page-header">
   <div>
-    <h1>What the app learned</h1>
-    <p class="muted">People patterns and normal weekly limits.</p>
+    <h1>Normal week</h1>
+    <p class="muted">History suggests the baseline; manager-approved rules are what generation should trust.</p>
   </div>
   <div class="actions">
-    <a class="btn" href="{% url 'roster:learn' %}">Relearn</a>
-    <a class="btn primary"
-       href="{% url 'roster:generate_patterns' %}">
-      Generate roster
-    </a>
+    <a class="btn" href="{% url 'roster:learn' %}">Relearn history</a>
+    <a class="btn primary" href="{% url 'roster:generate_patterns' %}">Generate roster</a>
   </div>
 </div>
 
-<div class="card table-wrap">
-<table>
-<thead>
-<tr>
-  <th>Employee</th>
-  <th>Area</th>
-  <th>Normal hours</th>
-  <th>Normal days</th>
-  <th>Pattern</th>
-  <th>Usually works</th>
-</tr>
-</thead>
-<tbody>
+<div class="card">
+  <h2>How this works</h2>
+  <p class="muted">Set only the things you know are stable: normal weekly hours, normal number of days and main area. Leave a value at 0 to keep using the learned history for that value.</p>
+</div>
+
+<div class="profile-list">
 {% for p in patterns %}
-<tr>
-  <td><strong>{{ p.employee.full_name }}</strong></td>
-  <td>{{ p.get_normal_department_display|default:"—" }}</td>
-  <td>{{ p.average_weekly_hours }}</td>
-  <td>{{ p.average_days_worked }}</td>
-  <td>
-    {% if p.average_days_worked < 1 %}
-      Rarely works
-    {% elif p.consistency >= 60 %}
-      Predictable
-    {% elif p.consistency >= 40 %}
-      Varies a little
-    {% else %}
-      Varies weekly
-    {% endif %}
-  </td>
-  <td>
-    {% if p.day_probabilities.mon >= 50 %}Mon {% endif %}
-    {% if p.day_probabilities.tue >= 50 %}Tue {% endif %}
-    {% if p.day_probabilities.wed >= 50 %}Wed {% endif %}
-    {% if p.day_probabilities.thu >= 50 %}Thu {% endif %}
-    {% if p.day_probabilities.fri >= 50 %}Fri {% endif %}
-    {% if p.day_probabilities.sat >= 50 %}Sat {% endif %}
-    {% if p.day_probabilities.sun >= 50 %}Sun{% endif %}
-  </td>
-</tr>
+  <article class="card schedule-profile-card">
+    <div class="profile-heading">
+      <div><h3>{{ p.employee.full_name }}</h3><span>{{ p.get_normal_department_display|default:p.employee.get_department_display }} · history: {{ p.average_weekly_hours }}h / {{ p.average_days_worked }} days</span></div>
+      <span class="pattern-confidence">{% if p.consistency >= 60 %}Predictable{% elif p.consistency >= 40 %}Varies a little{% else %}Varies weekly{% endif %}</span>
+    </div>
+    <div class="learned-days"><strong>Usually works:</strong>
+      {% if p.day_probabilities.mon >= 50 %}Mon {% endif %}{% if p.day_probabilities.tue >= 50 %}Tue {% endif %}{% if p.day_probabilities.wed >= 50 %}Wed {% endif %}{% if p.day_probabilities.thu >= 50 %}Thu {% endif %}{% if p.day_probabilities.fri >= 50 %}Fri {% endif %}{% if p.day_probabilities.sat >= 50 %}Sat {% endif %}{% if p.day_probabilities.sun >= 50 %}Sun{% endif %}
+    </div>
+    <form method="post" action="{% url 'roster:save_schedule_profile' p.employee.pk %}" class="profile-form">{% csrf_token %}
+      <label>Normal hours<input type="number" name="target_hours" min="0" max="80" step="0.5" value="{{ p.employee.schedule_profile.target_hours|default:0 }}"></label>
+      <label>Normal days<input type="number" name="target_days" min="0" max="7" step="1" value="{{ p.employee.schedule_profile.target_days|default:0 }}"></label>
+      <label>Main area<select name="preferred_department"><option value="">Use learned</option><option value="restaurant" {% if p.employee.schedule_profile.preferred_department == 'restaurant' %}selected{% endif %}>Restaurant</option><option value="bar" {% if p.employee.schedule_profile.preferred_department == 'bar' %}selected{% endif %}>Bar</option></select></label>
+      <label class="profile-notes">Manager note<input type="text" name="notes" maxlength="250" value="{{ p.employee.schedule_profile.notes|default:'' }}" placeholder="e.g. Full time anchor; prefers early shifts"></label>
+      <button class="btn primary" type="submit">Save normal week</button>
+    </form>
+  </article>
 {% empty %}
-<tr><td colspan="6">No patterns yet.</td></tr>
+  <div class="card">No patterns yet. Import historic rosters, then run Learning.</div>
 {% endfor %}
-</tbody>
-</table>
 </div>
 {% endblock %}
