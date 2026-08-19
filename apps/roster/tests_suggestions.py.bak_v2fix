@@ -56,6 +56,12 @@ class RankedSuggestionTests(TestCase):
             uncertain_threshold=999,
         )
 
-        # Normal generation now auto-assigns the best safe candidate.
-        self.assertEqual(result["open"], 0)
-        self.assertGreaterEqual(result["created"], 1)
+        self.assertEqual(result["open"], 1)
+        self.assertEqual(len(result["suggestions"][0]["choices"]), 5)
+        self.assertEqual(
+            result["suggestions"][0]["choices"][0]["name"],
+            "Fiona",
+        )
+        self.assertTrue(
+            result["suggestions"][0]["choices"][0]["reasons"]
+        )

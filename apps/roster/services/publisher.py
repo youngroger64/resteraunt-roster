@@ -4,9 +4,8 @@ from apps.roster.models import RosterStatus, RosterWeek
 
 @transaction.atomic
 def publish_roster(roster: RosterWeek, user) -> RosterWeek:
-    RosterWeek.objects.filter(
-        status=RosterStatus.PUBLISHED
-    ).exclude(pk=roster.pk).update(status=RosterStatus.SUPERSEDED)
+    # Different weeks may all remain published so staff can see upcoming rosters.
+    # Superseding belongs to versioning of the same week, not to publishing next week.
     roster.status = RosterStatus.PUBLISHED
     roster.published_at = timezone.now()
     roster.published_by = user

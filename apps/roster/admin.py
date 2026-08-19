@@ -9,6 +9,10 @@ from .models import (
     Shift,
     ShiftTemplatePattern,
     StaffingPattern,
+    EmployeeScheduleProfile,
+    AvailabilityException,
+    ShiftResponse,
+    OpenShiftRequest,
 )
 
 class ShiftInline(admin.TabularInline):
@@ -80,3 +84,24 @@ class ShiftTemplatePatternAdmin(admin.ModelAdmin):
         "confidence",
     )
     list_filter = ("weekday", "department")
+
+
+@admin.register(EmployeeScheduleProfile)
+class EmployeeScheduleProfileAdmin(admin.ModelAdmin):
+    list_display = ("employee", "target_hours", "target_days", "preferred_department")
+    search_fields = ("employee__first_name", "employee__last_name")
+
+@admin.register(AvailabilityException)
+class AvailabilityExceptionAdmin(admin.ModelAdmin):
+    list_display = ("employee", "date", "unavailable", "available_from", "available_until")
+    list_filter = ("date", "unavailable")
+
+@admin.register(ShiftResponse)
+class ShiftResponseAdmin(admin.ModelAdmin):
+    list_display = ("employee", "shift", "status", "created_at")
+    list_filter = ("status",)
+
+@admin.register(OpenShiftRequest)
+class OpenShiftRequestAdmin(admin.ModelAdmin):
+    list_display = ("employee", "open_shift", "status", "created_at")
+    list_filter = ("status",)

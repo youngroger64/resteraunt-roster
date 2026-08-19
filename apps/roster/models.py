@@ -280,3 +280,145 @@ class PayrollRecord(TimeStampedModel):
 
     def __str__(self):
         return f"{self.employee} — {self.payroll_week.week_end}: {self.total_hours}h"
+
+
+class EmployeeScheduleProfile(TimeStampedModel):
+    """Manager-approved scheduling defaults. Learned patterns remain evidence, not policy."""
+    employee = models.OneToOneField(
+        Employee, on_delete=models.CASCADE, related_name="schedule_profile"
+    )
+    target_hours = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    target_days = models.PositiveSmallIntegerField(default=0)
+    preferred_department = models.CharField(
+        max_length=20, choices=Department.choices, blank=True
+    )
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["employee__first_name", "employee__last_name"]
+
+    def __str__(self):
+        return f"Schedule profile for {self.employee}"
+
+
+class AvailabilityException(TimeStampedModel):
+    """A dated exception to an employee's normal/learned availability."""
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="availability_exceptions"
+    )
+    date = models.DateField()
+    unavailable = models.BooleanField(default=False)
+    available_from = models.TimeField(null=True, blank=True)
+    available_until = models.TimeField(null=True, blank=True)
+    note = models.CharField(max_length=250, blank=True)
+
+    class Meta:
+        ordering = ["date", "employee__first_name", "employee__last_name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["employee", "date"],
+                name="unique_employee_availability_exception_date",
+            )
+        ]
+
+    def clean(self):
+        if self.unavailable and (self.available_from or self.available_until):
+            raise ValidationError(
+                "An unavailable day cannot also have an availability time window."
+            )
+        if not self.unavailable and bool(self.available_from) != bool(self.available_until):
+            raise ValidationError("Set both available-from and available-until times.")
+
+    def __str__(self):
+        if self.unavailable:
+            return f"{self.employee} unavailable {self.date}"
+        if self.available_from and self.available_until:
+            return (
+                f"{self.employee} available {self.date} "
+                f"{self.available_from:%H:%M}-{self.available_until:%H:%M}"
+            )
+        return f"{self.employee} availability note {self.date}"
+
+
+class ShiftResponseStatus(models.TextChoices):
+    SEEN = "seen", "Seen"
+    CONFIRMED = "confirmed", "Confirmed"
+    CANNOT_WORK = "cannot_work", "Cannot work"
+    RESOLVED = "resolved", "Resolved"
+
+
+class ShiftResponse(TimeStampedModel):
+    shift = models.ForeignKey(Shift, on_delete=models.CASCADE, related_name="responses")
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="shift_responses"
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=ShiftResponseStatus.choices,
+        default=ShiftResponseStatus.SEEN,
+    )
+    reason = models.CharField(max_length=250, blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="resolved_shift_responses",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["shift", "employee"], name="unique_employee_shift_response"
+            )
+        ]
+
+    def clean(self):
+        if self.shift_id and self.employee_id and self.shift.employee_id != self.employee_id:
+            raise ValidationError("Employees can only respond to their own assigned shift.")
+
+    def __str__(self):
+        return f"{self.employee}: {self.shift} — {self.get_status_display()}"
+
+
+class OpenShiftRequestStatus(models.TextChoices):
+    REQUESTED = "requested", "Requested"
+    APPROVED = "approved", "Approved"
+    DECLINED = "declined", "Declined"
+
+
+class OpenShiftRequest(TimeStampedModel):
+    open_shift = models.ForeignKey(
+        OpenShift, on_delete=models.CASCADE, related_name="requests"
+    )
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, related_name="open_shift_requests"
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=OpenShiftRequestStatus.choices,
+        default=OpenShiftRequestStatus.REQUESTED,
+    )
+    note = models.CharField(max_length=250, blank=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="decided_open_shift_requests",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["open_shift", "employee"],
+                name="unique_employee_open_shift_request",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.employee}: {self.open_shift} — {self.get_status_display()}"

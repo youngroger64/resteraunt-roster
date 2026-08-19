@@ -7,6 +7,7 @@ from django.contrib.auth.decorators import login_required
 from django.db import transaction
 from django.db.models import Case, IntegerField, Value, When
 from django.http import HttpResponse, HttpResponseBadRequest
+from django.utils import timezone
 from django.shortcuts import get_object_or_404, redirect, render
 from apps.employees.models import Department, Employee
 from .forms import GeneratePatternRosterForm, RosterWeekForm
@@ -20,6 +21,11 @@ from .models import (
     RosterWeek,
     Shift,
     StaffingPattern,
+    ShiftResponse,
+    ShiftResponseStatus,
+    EmployeeScheduleProfile,
+    OpenShiftRequest,
+    OpenShiftRequestStatus,
 )
 from .services.generator import (
     candidate_availability,
@@ -28,6 +34,7 @@ from .services.generator import (
     parse_signature,
     rank_candidates,
     signature_duration,
+    target_hours,
 )
 from .services.learner import learn_patterns
 from .services.publisher import publish_roster
@@ -82,8 +89,35 @@ def learn(request):
 @login_required
 def pattern_list(request):
     return render(request, "roster/patterns.html", {
-        "patterns":EmployeePattern.objects.select_related("employee")
+        "patterns": EmployeePattern.objects.select_related("employee", "employee__schedule_profile")
     })
+
+
+@login_required
+def save_schedule_profile(request, employee_id):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+    employee = get_object_or_404(Employee, pk=employee_id)
+    try:
+        target_hours_value = max(0, float(request.POST.get("target_hours") or 0))
+        target_days_value = min(7, max(0, int(request.POST.get("target_days") or 0)))
+    except ValueError:
+        messages.error(request, "Target hours and days must be numbers.")
+        return redirect("roster:patterns")
+    preferred_department = request.POST.get("preferred_department", "")
+    if preferred_department not in {"", Department.RESTAURANT, Department.BAR}:
+        return HttpResponseBadRequest("Invalid department")
+    EmployeeScheduleProfile.objects.update_or_create(
+        employee=employee,
+        defaults={
+            "target_hours": target_hours_value,
+            "target_days": target_days_value,
+            "preferred_department": preferred_department,
+            "notes": request.POST.get("notes", "").strip(),
+        },
+    )
+    messages.success(request, f"Normal scheduling rules saved for {employee.full_name}.")
+    return redirect("roster:patterns")
 
 @login_required
 def generate_pattern_roster(request):
@@ -305,10 +339,7 @@ def roster_detail(request, pk):
         )
 
         if pattern:
-            if employee.department == Department.BAR:
-                learned_target = round(float(pattern.bar_target_hours), 1)
-            else:
-                learned_target = round(float(pattern.restaurant_target_hours), 1)
+            learned_target = round(float(target_hours(pattern, employee.department)), 1)
             payroll_target = round(float(pattern.payroll_average_hours), 1)
         else:
             learned_target = None
@@ -334,6 +365,50 @@ def roster_detail(request, pk):
             }
         )
 
+    # Employee requests that need manager attention. The assigned shift remains
+    # unchanged until the manager explicitly chooses a replacement.
+    shift_change_requests = []
+    for response in ShiftResponse.objects.filter(
+        shift__roster_week=roster,
+        status=ShiftResponseStatus.CANNOT_WORK,
+    ).select_related("shift", "employee"):
+        shift = response.shift
+        signature = f"{shift.start_time.strftime('%H:%M')}-{shift.end_time.strftime('%H:%M')}"
+        ranked = rank_candidates(
+            roster=roster,
+            patterns=patterns,
+            weekday=shift.date.weekday(),
+            department=shift.department,
+            signature=signature,
+            current_hours=current_hours,
+            current_days=current_days,
+            shift_date=shift.date,
+        )
+        choices = []
+        for item in ranked:
+            candidate = item["pattern"].employee
+            if candidate.pk == response.employee_id:
+                continue
+            choices.append({
+                "employee_id": candidate.pk,
+                "name": candidate.full_name,
+                "reasons": item["reasons"],
+            })
+            if len(choices) == 5:
+                break
+        shift_change_requests.append({
+            "response": response,
+            "shift": shift,
+            "choices": choices,
+        })
+
+    open_shift_requests = list(
+        OpenShiftRequest.objects.filter(
+            open_shift__roster_week=roster,
+            status=OpenShiftRequestStatus.REQUESTED,
+        ).select_related("open_shift", "employee")
+    )
+
     return render(
         request,
         "roster/detail.html",
@@ -346,6 +421,8 @@ def roster_detail(request, pk):
             "open_shift_groups": open_shift_groups,
             "show_all": show_all,
             "scheduled_employee_count": len(scheduled_employee_ids),
+            "shift_change_requests": shift_change_requests,
+            "open_shift_requests": open_shift_requests,
         },
     )
 
@@ -983,6 +1060,95 @@ def assign_suggested_employee(request, pk, open_shift_id, employee_id):
 
     open_shift.delete()
     messages.success(request, f"Assigned to {employee.full_name}.")
+    return redirect("roster:detail", pk=pk)
+
+
+@login_required
+def replace_requested_shift(request, pk, response_id, employee_id):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+    roster = get_object_or_404(RosterWeek, pk=pk)
+    response = get_object_or_404(
+        ShiftResponse.objects.select_related("shift", "employee"),
+        pk=response_id,
+        shift__roster_week=roster,
+        status=ShiftResponseStatus.CANNOT_WORK,
+    )
+    replacement = get_object_or_404(Employee, pk=employee_id, is_active=True)
+    shift = response.shift
+    signature = f"{shift.start_time.strftime('%H:%M')}-{shift.end_time.strftime('%H:%M')}"
+    availability = candidate_availability(
+        roster=roster,
+        employee=replacement,
+        shift_date=shift.date,
+        signature=signature,
+    )
+    if not availability["available"]:
+        messages.error(request, f"{replacement.full_name} is not available: {availability['reason']}")
+        return redirect("roster:detail", pk=pk)
+    if shift.department == Department.BAR and not replacement.can_work_bar:
+        messages.error(request, "That employee cannot work Bar.")
+        return redirect("roster:detail", pk=pk)
+    if shift.department == Department.RESTAURANT and not replacement.can_work_restaurant:
+        messages.error(request, "That employee cannot work Restaurant.")
+        return redirect("roster:detail", pk=pk)
+
+    original_name = response.employee.full_name
+    shift.employee = replacement
+    shift.source = "manager_rearrange"
+    shift.notes = (shift.notes + " | " if shift.notes else "") + f"Reassigned from {original_name}"
+    shift.save(update_fields=["employee", "source", "notes", "updated_at"])
+    response.status = ShiftResponseStatus.RESOLVED
+    response.resolved_at = timezone.now()
+    response.resolved_by = request.user
+    response.save(update_fields=["status", "resolved_at", "resolved_by", "updated_at"])
+    messages.success(request, f"Shift moved from {original_name} to {replacement.full_name}.")
+    return redirect("roster:detail", pk=pk)
+
+
+@login_required
+def approve_open_shift_request(request, pk, request_id):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+    roster = get_object_or_404(RosterWeek, pk=pk)
+    shift_request = get_object_or_404(
+        OpenShiftRequest.objects.select_related("open_shift", "employee"),
+        pk=request_id,
+        open_shift__roster_week=roster,
+        status=OpenShiftRequestStatus.REQUESTED,
+    )
+    open_shift = shift_request.open_shift
+    employee = shift_request.employee
+    allowed, reason = _employee_can_take_open_shift(roster, open_shift, employee)
+    if not allowed:
+        messages.error(request, f"{employee.full_name} is no longer available: {reason}")
+        return redirect("roster:detail", pk=pk)
+
+    parts = parse_signature(open_shift.source_signature or open_shift.display_time.replace("–", "-"))
+    for segment, start, end in parts:
+        Shift.objects.create(
+            roster_week=roster, employee=employee, department=open_shift.department,
+            date=open_shift.date, start_time=start, end_time=end, segment=segment,
+            source="staff_request", confidence=100,
+        )
+    open_shift.delete()
+    messages.success(request, f"Approved {employee.full_name} for the open shift.")
+    return redirect("roster:detail", pk=pk)
+
+
+@login_required
+def decline_open_shift_request(request, pk, request_id):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+    roster = get_object_or_404(RosterWeek, pk=pk)
+    shift_request = get_object_or_404(
+        OpenShiftRequest, pk=request_id, open_shift__roster_week=roster
+    )
+    shift_request.status = OpenShiftRequestStatus.DECLINED
+    shift_request.decided_at = timezone.now()
+    shift_request.decided_by = request.user
+    shift_request.save(update_fields=["status", "decided_at", "decided_by", "updated_at"])
+    messages.info(request, "Open shift request declined.")
     return redirect("roster:detail", pk=pk)
 
 

@@ -389,32 +389,11 @@ def automatic_assignment_safe(
     current_hours,
     current_days,
 ):
-    """
-    Decide whether the generator may automatically assign this employee.
-
-    Ranking is deliberately softer: an over-target employee can still appear
-    as a manager suggestion. Automatic generation, however, must respect the
-    employee's normal working-day and weekly-hours limits.
-    """
-
-    day_limit = target_days(pattern)
-
-    # If this shift would create another working day beyond the employee's
-    # normal target, do not assign it automatically.
-    if day_limit and current_days >= day_limit:
-        return False
-
-    proposed_hours = signature_duration(signature)
-    projected_hours = current_hours + proposed_hours
-
-    # The existing ceiling includes the allowed tolerance above the employee's
-    # normal weekly hours.
-    ceiling = automatic_hour_ceiling(pattern, department)
-
-    if projected_hours > ceiling:
-        return False
-
-    return True
+    # Normal hours/days are ranking preferences, not reasons to stop and ask
+    # the manager to make a routine choice. Availability, role eligibility
+    # and clashes are filtered earlier. Keep only the genuine hard guard here:
+    # automatic generation will not create a seventh working day.
+    return current_days < 6
 
 
 def score_candidate(
@@ -438,6 +417,10 @@ def score_candidate(
         if average_hours >= 8
         else 1.0
     )
+
+    # Six days remains a hard safety limit for automatic generation.
+    if current_days >= 6:
+        return -999
 
     proposed_hours = signature_duration(signature)
     projected_hours = current_hours + proposed_hours
@@ -474,17 +457,34 @@ def score_candidate(
     elif typical_signature != "OFF":
         score += 15 if typical_band == proposed_band else -25
 
+    # Normal days, time-of-day and target ceilings are preferences,
+    # not reasons to leave a real shift empty.
+    if (
+        current_days >= target_days(pattern)
+        and completion >= 0.75
+    ):
+        score -= 45
+
     if unusual_time:
         score -= 55
 
-    hour_score = hours_target_score(
+    ceiling = automatic_hour_ceiling(
         pattern,
-        current_hours,
-        proposed_hours,
         department,
     )
-    if hour_score > -999:
-        score += hour_score
+    if projected_hours > ceiling:
+        score -= 35 + round(
+            (projected_hours - ceiling) * 6
+        )
+    else:
+        hour_score = hours_target_score(
+            pattern,
+            current_hours,
+            proposed_hours,
+            department,
+        )
+        if hour_score > -999:
+            score += hour_score
 
     if target_days(pattern) - current_days == 1:
         score += 8

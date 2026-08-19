@@ -187,10 +187,33 @@ def learn_patterns():
 
         average_days = sum(days_per_week) / week_count if week_count else 0
 
+        # Keep the employee's primary area aligned with strong historical
+        # evidence. Importing a person before importing old rosters can leave
+        # their original department stale (for example a regular bar worker
+        # first created as Restaurant). Only auto-correct when at least 70%
+        # of their historic shift segments agree, so genuinely cross-trained
+        # employees are not forced into one area by a narrow majority.
+        dominant_department = departments.most_common(1)[0][0] if departments else ""
+        dominant_count = departments[dominant_department] if dominant_department else 0
+        if shifts and dominant_department and dominant_count / len(shifts) >= 0.70:
+            changed = []
+            if employee.department != dominant_department:
+                employee.department = dominant_department
+                changed.append("department")
+            if dominant_department == Department.BAR and not employee.can_work_bar:
+                employee.can_work_bar = True
+                changed.append("can_work_bar")
+            if dominant_department == Department.RESTAURANT and not employee.can_work_restaurant:
+                employee.can_work_restaurant = True
+                changed.append("can_work_restaurant")
+            if changed:
+                changed.append("updated_at")
+                employee.save(update_fields=changed)
+
         pattern = EmployeePattern.objects.create(
             employee=employee,
             weeks_seen=week_count,
-            normal_department=departments.most_common(1)[0][0] if departments else "",
+            normal_department=dominant_department,
             average_weekly_hours=Decimal(str(round(average_hours, 2))),
             payroll_average_hours=Decimal(str(round(payroll_average, 2))),
             restaurant_target_hours=Decimal(str(round(restaurant_target, 2))),
