@@ -97,6 +97,89 @@ class EmployeePattern(TimeStampedModel):
         return f"Pattern for {self.employee}"
 
 
+
+class ClockingPatternImport(TimeStampedModel):
+    """
+    One imported snapshot from the clocking application.
+
+    These imports describe overall employee working behaviour. They must not
+    be used to infer Restaurant/Kitchen/Bar eligibility because the clocking
+    system does not reliably identify the department worked.
+    """
+    source_name = models.CharField(max_length=255, blank=True)
+    period_label = models.CharField(max_length=120, blank=True)
+    imported_rows = models.PositiveIntegerField(default=0)
+    notes = models.CharField(max_length=500, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.source_name or f"Clocking import {self.pk}"
+
+
+class EmployeeClockingPattern(TimeStampedModel):
+    class WorkerType(models.TextChoices):
+        CORE = "core", "Core"
+        REGULAR_PART_TIME = "regular_part_time", "Regular part-time"
+        OCCASIONAL = "occasional", "Occasional"
+        INSUFFICIENT = "insufficient", "Insufficient history"
+
+    employee = models.OneToOneField(
+        Employee,
+        on_delete=models.CASCADE,
+        related_name="clocking_pattern",
+    )
+
+    import_batch = models.ForeignKey(
+        ClockingPatternImport,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="employee_patterns",
+    )
+
+    weeks_observed = models.PositiveSmallIntegerField(default=0)
+    active_weeks = models.PositiveSmallIntegerField(default=0)
+
+    average_weekly_hours = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        default=0,
+    )
+
+    average_shifts_per_active_week = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+    )
+
+    typical_start_time = models.TimeField(null=True, blank=True)
+    typical_end_time = models.TimeField(null=True, blank=True)
+
+    weekday_counts = models.JSONField(default=dict, blank=True)
+
+    worker_type = models.CharField(
+        max_length=30,
+        choices=WorkerType.choices,
+        default=WorkerType.INSUFFICIENT,
+    )
+
+    confidence = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ["employee__first_name", "employee__last_name"]
+
+    @property
+    def activity_ratio(self):
+        if not self.weeks_observed:
+            return 0
+        return self.active_weeks / self.weeks_observed
+
+    def __str__(self):
+        return f"Clocking pattern for {self.employee}"
+
+
 class StaffingPattern(TimeStampedModel):
     weekday = models.PositiveSmallIntegerField()
     department = models.CharField(max_length=20, choices=Department.choices)
