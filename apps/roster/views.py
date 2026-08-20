@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 from io import BytesIO
 from django.contrib import messages
 import xlsxwriter
@@ -46,22 +46,41 @@ from apps.roster.services.generator import copied_shift_availability_issues
 from apps.roster.services.generator import replacement_suggestions_for_shift
 from apps.roster.services.generator import shift_band, employee_typical_band
 
+
 @login_required
 def roster_list(request):
-    return render(request, "roster/list.html", {"rosters":RosterWeek.objects.all()})
+    rosters = (
+        RosterWeek.objects
+        .exclude(purpose=RosterPurpose.BASE)
+        .order_by("-week_start")
+    )
+    return render(
+        request,
+        "roster/list.html",
+        {"rosters": rosters},
+    )
+
 
 @login_required
 def roster_create(request):
     """
-    Prepare the next weekly roster from the latest real weekly roster.
+    Create a weekly draft from one of four explicit starting points:
 
-    The previous roster is the baseline. We preserve employees,
-    departments and exact shift times rather than rebuilding the week
-    to satisfy abstract hour targets.
+    - protected default/base roster
+    - previous weekly roster
+    - learned generator
+    - blank roster
     """
     form = RosterWeekForm(request.POST or None)
 
-    latest = (
+    default_roster = (
+        RosterWeek.objects
+        .filter(purpose=RosterPurpose.BASE)
+        .order_by("-updated_at")
+        .first()
+    )
+
+    latest_weekly = (
         RosterWeek.objects
         .filter(purpose=RosterPurpose.WEEKLY)
         .order_by("-week_start")
@@ -69,25 +88,63 @@ def roster_create(request):
     )
 
     if request.method == "POST" and form.is_valid():
+        week_start = form.cleaned_data["week_start"]
+
+        existing = RosterWeek.objects.filter(
+            week_start=week_start
+        ).first()
+
+        if existing:
+            messages.error(
+                request,
+                "A roster already exists for that week.",
+            )
+            return redirect(
+                "roster:detail",
+                pk=existing.pk,
+            )
+
+        start_mode = request.POST.get(
+            "start_mode",
+            "default",
+        )
+
         roster = form.save(commit=False)
         roster.purpose = RosterPurpose.WEEKLY
+        roster.status = RosterStatus.DRAFT
         roster.save()
 
-        copied = 0
-        issues = []
+        # ----------------------------------------------------
+        # DEFAULT
+        # ----------------------------------------------------
+        if start_mode == "default":
+            if not default_roster:
+                roster.delete()
+                messages.error(
+                    request,
+                    "No default roster has been saved yet.",
+                )
+                return redirect("roster:create")
 
-        if request.POST.get("copy_latest") and latest:
-            copied = copy_roster(latest, roster)
-            issues = copied_shift_availability_issues(roster)
+            copied = copy_roster(
+                default_roster,
+                roster,
+            )
 
-            request.session[f"copied_issues_{roster.pk}"] = issues
+            issues = copied_shift_availability_issues(
+                roster
+            )
+
+            request.session[
+                f"copied_issues_{roster.pk}"
+            ] = issues
 
             if issues:
                 messages.warning(
                     request,
                     (
-                        f"Next week prepared from the previous roster. "
-                        f"{copied} shifts kept exactly as scheduled. "
+                        f"Draft created from the default roster. "
+                        f"{copied} shifts copied; "
                         f"{len(issues)} need attention."
                     ),
                 )
@@ -95,19 +152,111 @@ def roster_create(request):
                 messages.success(
                     request,
                     (
-                        f"Next week prepared from the previous roster. "
-                        f"{copied} shifts copied with no availability problems."
+                        f"Draft created from the default roster. "
+                        f"{copied} shifts copied."
                     ),
                 )
 
-        return redirect("roster:detail", pk=roster.pk)
+        # ----------------------------------------------------
+        # PREVIOUS WEEK
+        # ----------------------------------------------------
+        elif start_mode == "previous":
+            previous = (
+                RosterWeek.objects
+                .filter(
+                    purpose=RosterPurpose.WEEKLY,
+                    week_start__lt=week_start,
+                )
+                .order_by("-week_start")
+                .first()
+            )
+
+            if not previous:
+                roster.delete()
+                messages.error(
+                    request,
+                    "There is no previous weekly roster to copy.",
+                )
+                return redirect("roster:create")
+
+            copied = copy_roster(
+                previous,
+                roster,
+            )
+
+            issues = copied_shift_availability_issues(
+                roster
+            )
+
+            request.session[
+                f"copied_issues_{roster.pk}"
+            ] = issues
+
+            if issues:
+                messages.warning(
+                    request,
+                    (
+                        f"Draft copied from {previous}. "
+                        f"{copied} shifts copied; "
+                        f"{len(issues)} need attention."
+                    ),
+                )
+            else:
+                messages.success(
+                    request,
+                    (
+                        f"Draft copied from {previous}. "
+                        f"{copied} shifts copied."
+                    ),
+                )
+
+        # ----------------------------------------------------
+        # GENERATE FROM LEARNING
+        # ----------------------------------------------------
+        elif start_mode == "generated":
+            result = generate_business_roster(
+                roster,
+                uncertain_threshold=75,
+            )
+
+            messages.success(
+                request,
+                (
+                    f"Draft generated from learning. "
+                    f"{result['created']} shifts assigned; "
+                    f"{result['open']} need a manager choice."
+                ),
+            )
+
+        # ----------------------------------------------------
+        # BLANK
+        # ----------------------------------------------------
+        elif start_mode == "blank":
+            messages.success(
+                request,
+                "Blank draft created.",
+            )
+
+        else:
+            roster.delete()
+            messages.error(
+                request,
+                "Choose how you want to start the roster.",
+            )
+            return redirect("roster:create")
+
+        return redirect(
+            "roster:detail",
+            pk=roster.pk,
+        )
 
     return render(
         request,
         "roster/create.html",
         {
             "form": form,
-            "latest": latest,
+            "default_roster": default_roster,
+            "latest_weekly": latest_weekly,
         },
     )
 
@@ -1692,6 +1841,31 @@ def replace_requested_shift(request, pk, response_id, employee_id):
     shift.source = "manager_rearrange"
     shift.notes = (shift.notes + " | " if shift.notes else "") + f"Reassigned from {original_name}"
     shift.save(update_fields=["employee", "source", "notes", "updated_at"])
+
+    # If the replacement employee previously gave up a shift in this
+    # roster and asked for replacement hours, this newly assigned shift
+    # satisfies one outstanding request.
+    outstanding_hours_request = (
+        ShiftResponse.objects
+        .filter(
+            shift__roster_week=roster,
+            employee=replacement,
+            status=ShiftResponseStatus.RESOLVED,
+            wants_replacement_shift=True,
+        )
+        .order_by("created_at")
+        .first()
+    )
+
+    if outstanding_hours_request:
+        outstanding_hours_request.wants_replacement_shift = False
+        outstanding_hours_request.save(
+            update_fields=[
+                "wants_replacement_shift",
+                "updated_at",
+            ]
+        )
+
     response.status = ShiftResponseStatus.RESOLVED
     response.resolved_at = timezone.now()
     response.resolved_by = request.user
@@ -1767,13 +1941,6 @@ def roster_delete(request, pk):
     open_shift_count = roster.open_shifts.count()
 
     if request.method == "POST":
-        if roster.status == RosterStatus.PUBLISHED:
-            messages.error(
-                request,
-                "Published rosters cannot be deleted here.",
-            )
-            return redirect("roster:detail", pk=roster.pk)
-
         purpose = roster.get_purpose_display()
         label = str(roster)
         roster.delete()
@@ -1991,3 +2158,234 @@ def roster_regenerate(request, pk):
         f"{result['open']} shifts need a choice.",
     )
     return redirect("roster:detail", pk=roster.pk)
+
+
+@login_required
+def set_default_roster(request, pk):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+
+    source = get_object_or_404(
+        RosterWeek,
+        pk=pk,
+        purpose=RosterPurpose.WEEKLY,
+    )
+
+    # A protected Base roster lives on a reserved historical
+    # week. It is not shown in the normal weekly roster list.
+    from datetime import date
+
+    base_week_start = date(2000, 1, 3)
+
+    base = (
+        RosterWeek.objects
+        .filter(purpose=RosterPurpose.BASE)
+        .first()
+    )
+
+    if base is None:
+        # Guard against the reserved date already being used.
+        existing = RosterWeek.objects.filter(
+            week_start=base_week_start
+        ).first()
+
+        if existing:
+            messages.error(
+                request,
+                "The reserved default-roster date is already in use.",
+            )
+            return redirect(
+                "roster:detail",
+                pk=source.pk,
+            )
+
+        base = RosterWeek.objects.create(
+            week_start=base_week_start,
+            purpose=RosterPurpose.BASE,
+            status=RosterStatus.DRAFT,
+            notes="Protected default roster",
+        )
+    else:
+        base.shifts.all().delete()
+        base.open_shifts.all().delete()
+
+    copied = copy_roster(
+        source,
+        base,
+    )
+
+    # Old weekly is_default flags are no longer authoritative.
+    RosterWeek.objects.filter(
+        purpose=RosterPurpose.WEEKLY,
+        is_default=True,
+    ).update(is_default=False)
+
+    messages.success(
+        request,
+        (
+            f"Default roster updated from {source}. "
+            f"{copied} shifts saved to the protected default."
+        ),
+    )
+
+    return redirect(
+        "roster:detail",
+        pk=source.pk,
+    )
+
+@login_required
+def add_shift(request, pk):
+    roster = get_object_or_404(RosterWeek, pk=pk)
+
+    employees = (
+        Employee.objects
+        .filter(is_active=True)
+        .order_by("first_name", "last_name")
+    )
+
+    if request.method == "POST":
+        employee = get_object_or_404(
+            Employee,
+            pk=request.POST.get("employee_id"),
+            is_active=True,
+        )
+
+        date_text = request.POST.get("date", "")
+        start_text = request.POST.get("start_time", "")
+        end_text = request.POST.get("end_time", "")
+        department = request.POST.get("department", "")
+
+        try:
+            shift_date = date.fromisoformat(date_text)
+        except ValueError:
+            messages.error(request, "Choose a valid date.")
+            return redirect("roster:add_shift", pk=pk)
+
+        if not (
+            roster.week_start
+            <= shift_date
+            <= roster.week_end
+        ):
+            messages.error(
+                request,
+                "That date is outside this roster week.",
+            )
+            return redirect("roster:add_shift", pk=pk)
+
+        if department not in {
+            Department.RESTAURANT,
+            Department.BAR,
+        }:
+            messages.error(
+                request,
+                "Choose Restaurant or Bar.",
+            )
+            return redirect("roster:add_shift", pk=pk)
+
+        if (
+            department == Department.BAR
+            and not employee.can_work_bar
+        ):
+            messages.error(
+                request,
+                f"{employee.full_name} cannot work Bar.",
+            )
+            return redirect("roster:add_shift", pk=pk)
+
+        if (
+            department == Department.RESTAURANT
+            and not employee.can_work_restaurant
+        ):
+            messages.error(
+                request,
+                f"{employee.full_name} cannot work Restaurant.",
+            )
+            return redirect("roster:add_shift", pk=pk)
+
+        signature = f"{start_text}-{end_text}"
+
+        try:
+            parts = parse_signature(signature)
+        except Exception:
+            messages.error(
+                request,
+                "Enter a valid start and finish time.",
+            )
+            return redirect("roster:add_shift", pk=pk)
+
+        availability = candidate_availability(
+            roster=roster,
+            employee=employee,
+            shift_date=shift_date,
+            signature=signature,
+        )
+
+        if not availability["available"]:
+            messages.error(
+                request,
+                (
+                    f"{employee.full_name} cannot take that shift: "
+                    f"{availability['reason']}"
+                ),
+            )
+            return redirect("roster:add_shift", pk=pk)
+
+        used_segments = set(
+            Shift.objects.filter(
+                roster_week=roster,
+                employee=employee,
+                date=shift_date,
+            ).values_list("segment", flat=True)
+        )
+
+        created = []
+
+        for _parsed_segment, start, end in parts:
+            segment = 1
+
+            while segment in used_segments:
+                segment += 1
+
+            shift = Shift.objects.create(
+                roster_week=roster,
+                employee=employee,
+                department=department,
+                date=shift_date,
+                start_time=start,
+                end_time=end,
+                segment=segment,
+                source="manual",
+                confidence=100,
+                notes="Added by manager",
+            )
+
+            used_segments.add(segment)
+            created.append(shift)
+
+        messages.success(
+            request,
+            (
+                f"Added shift for {employee.full_name}: "
+                f"{shift_date:%a %d %b} "
+                f"{start_text}–{end_text}."
+            ),
+        )
+
+        return redirect(
+            "roster:detail",
+            pk=roster.pk,
+        )
+
+    return render(
+        request,
+        "roster/add_shift.html",
+        {
+            "roster": roster,
+            "employees": employees,
+            "departments": [
+                (Department.RESTAURANT, "Restaurant"),
+                (Department.BAR, "Bar"),
+            ],
+        },
+    )
+

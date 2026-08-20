@@ -42,6 +42,12 @@
       {% endfor %}
     </div>
   </details>
+  <div style="margin-top: 12px;">
+    <a class="btn" href="{% url 'roster:add_shift' roster.pk %}">
+      + Add shift
+    </a>
+  </div>
+
 </div>
 
 
@@ -149,7 +155,10 @@
 <div class="page-header print-hide compact-header simplified-roster-header">
   <div>
     <h1>{{ roster }}</h1>
-    <p class="muted">{{ scheduled_employee_count }} staff scheduled · {{ roster.get_status_display }}</p>
+    <p class="muted">
+      {{ scheduled_employee_count }} staff scheduled · {{ roster.get_status_display }}
+      {% if roster.is_default %} · <strong>DEFAULT</strong>{% endif %}
+    </p>
   </div>
   <div class="actions primary-roster-actions">
     {% if roster.status == "draft" and roster.purpose == "weekly" %}
@@ -159,9 +168,22 @@
       </form>
     {% endif %}
     <details class="manager-more"><summary class="btn">More</summary><div class="manager-more-menu">
-      {% if show_all %}<a href="{% url 'roster:detail' roster.pk %}">Working only</a>{% else %}<a href="?show=all">Show all employees</a>{% endif %}
+      {% if show_all %}<a href="{% url 'roster:detail' roster.pk %}">Working only</a>{% else %}<a href="?show=all">Add / show employees</a>{% endif %}
       <button type="button" onclick="window.print()">Print</button>
       <a href="{% url 'roster:excel' roster.pk %}">Excel</a>
+
+      {% if roster.purpose == "weekly" %}
+        {% if roster.is_default %}
+          <span class="default-menu-label">✓ Default roster</span>
+        {% else %}
+          <form method="post"
+                action="{% url 'roster:set_default' roster.pk %}"
+                onsubmit="return confirm('Use this roster as the default for future weeks?')">
+            {% csrf_token %}
+            <button type="submit">Set as default</button>
+          </form>
+        {% endif %}
+      {% endif %}
       {% if roster.status == "draft" and roster.purpose == "weekly" %}
         <form method="post"
               action="{% url 'roster:regenerate' roster.pk %}"
@@ -170,7 +192,7 @@
           <button type="submit">Regenerate draft</button>
         </form>
       {% endif %}
-      {% if roster.status == "draft" %}<a href="{% url 'roster:delete' roster.pk %}" class="danger-link">Delete draft</a>{% endif %}
+      <a href="{% url 'roster:delete' roster.pk %}" class="danger-link">Delete roster</a>
     </div></details>
   </div>
 </div>
@@ -442,15 +464,44 @@
       </div>
       {% endif %}
 
-      <form method="post" action="{% url 'roster:save_cell' roster.pk %}">
+      <form method="post"
+            action="{% url 'roster:save_cell' roster.pk %}"
+            class="roster-cell-editor auto-cell-form">
         {% csrf_token %}
-        <input type="hidden" name="employee_id" value="{{ row.employee.pk }}">
-        <input type="hidden" name="date" value="{{ cell.day|date:'Y-m-d' }}">
-        <input type="hidden" name="department" value="{{ row.employee.department }}">
-        <input class="cell-input"
-               name="shift_text"
-               value="{% for shift in cell.shifts %}{{ shift.start_time|time:'H:i' }}-{{ shift.end_time|time:'H:i' }}{% if not forloop.last %}, {% endif %}{% endfor %}"
-               placeholder="OFF">
+
+        <input type="hidden"
+               name="employee_id"
+               value="{{ row.employee.pk }}">
+
+        <input type="hidden"
+               name="date"
+               value="{{ cell.day|date:'Y-m-d' }}">
+
+        <input type="hidden"
+               name="department"
+               value="{{ row.employee.department }}">
+
+        <button type="button"
+                class="cell-view">
+          {% if cell.shifts %}
+            {% for shift in cell.shifts %}
+              <span class="cell-shift-line">
+                {{ shift.start_time|time:"H:i" }}–{{ shift.end_time|time:"H:i" }}
+              </span>
+            {% endfor %}
+          {% else %}
+            <span class="cell-off">OFF</span>
+          {% endif %}
+        </button>
+
+        <div class="cell-inline-editor" hidden>
+          <input class="cell-input"
+                 name="shift_text"
+                 value="{% if cell.shifts %}{% for shift in cell.shifts %}{{ shift.start_time|time:'H:i' }}-{{ shift.end_time|time:'H:i' }}{% if not forloop.last %}, {% endif %}{% endfor %}{% else %}OFF{% endif %}"
+                 autocomplete="off">
+
+          <small>Click elsewhere to save</small>
+        </div>
       </form>
     {% else %}
       {% for shift in cell.shifts %}
@@ -481,8 +532,8 @@
   <h2>No employees are scheduled</h2>
   <p class="muted">Choose one:</p>
   <div class="actions">
-    <a class="btn primary" href="?show=all">Show all employees</a>
-    <a class="btn" href="{% url 'roster:generate_patterns' %}">
+    <a class="btn primary" href="?show=all">Add / show employees</a>
+    <a class="btn" href="{% url 'roster:create' %}">
       Generate again
     </a>
   </div>
@@ -493,4 +544,69 @@
   Enter <code>09:00-17:00</code>, a split shift separated by a comma,
   or <code>OFF</code>.
 </p>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll(".auto-cell-form").forEach(function (form) {
+    const view = form.querySelector(".cell-view");
+    const editor = form.querySelector(".cell-inline-editor");
+    const input = form.querySelector(".cell-input");
+
+    let original = input.value.trim();
+    let submitting = false;
+
+    function openEditor() {
+      view.hidden = true;
+      editor.hidden = false;
+      input.focus();
+      input.select();
+    }
+
+    function cancelEdit() {
+      input.value = original;
+      editor.hidden = true;
+      view.hidden = false;
+    }
+
+    function saveIfChanged() {
+      if (submitting) return;
+
+      let current = input.value.trim();
+
+      if (!current) {
+        current = "OFF";
+        input.value = "OFF";
+      }
+
+      if (current === original) {
+        editor.hidden = true;
+        view.hidden = false;
+        return;
+      }
+
+      submitting = true;
+      form.submit();
+    }
+
+    view.addEventListener("click", openEditor);
+
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        saveIfChanged();
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancelEdit();
+      }
+    });
+
+    input.addEventListener("blur", function () {
+      window.setTimeout(saveIfChanged, 100);
+    });
+  });
+});
+</script>
+
 {% endblock %}

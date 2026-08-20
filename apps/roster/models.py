@@ -22,6 +22,10 @@ class RosterWeek(TimeStampedModel):
     version = models.PositiveIntegerField(default=1)
     notes = models.TextField(blank=True)
     published_at = models.DateTimeField(null=True, blank=True)
+    is_default = models.BooleanField(
+        default=False,
+        help_text="Use this roster as the normal weekly starting template.",
+    )
     published_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True,
         on_delete=models.SET_NULL, related_name="published_rosters"

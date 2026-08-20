@@ -85,6 +85,53 @@ def _existing_intervals(roster, employee, shift_date):
 def candidate_availability(roster, employee, shift_date, signature):
     proposed = _signature_intervals(shift_date, signature)
 
+    # A staff member who has explicitly said they cannot work a shift
+    # remains unavailable for that overlapping period even after the
+    # manager reassigns their original shift to somebody else.
+    #
+    # Import locally to avoid adding model dependencies at module import time.
+    from apps.roster.models import ShiftResponse, ShiftResponseStatus
+
+    rejected_responses = (
+        ShiftResponse.objects
+        .filter(
+            employee=employee,
+            shift__roster_week=roster,
+            shift__date=shift_date,
+            status__in=[
+                ShiftResponseStatus.CANNOT_WORK,
+                ShiftResponseStatus.RESOLVED,
+            ],
+        )
+        .select_related("shift")
+    )
+
+    for response in rejected_responses:
+        rejected_shift = response.shift
+
+        rejected_start, rejected_end = _interval(
+            rejected_shift.date,
+            rejected_shift.start_time,
+            rejected_shift.end_time,
+        )
+
+        for proposed_start, proposed_end in proposed:
+            overlaps_rejected_period = (
+                proposed_start < rejected_end
+                and proposed_end > rejected_start
+            )
+
+            if overlaps_rejected_period:
+                return {
+                    "available": False,
+                    "possible_split": False,
+                    "reason": (
+                        "Employee already said they cannot work "
+                        f"{rejected_shift.start_time.strftime('%H:%M')}–"
+                        f"{rejected_shift.end_time.strftime('%H:%M')}"
+                    ),
+                }
+
     # Explicit dated availability always wins over learned/historic habits.
     availability_exception = AvailabilityException.objects.filter(
         employee=employee,
@@ -633,6 +680,14 @@ def rank_candidates(
     ranked = []
 
     for pattern in patterns:
+        # Grainne's rostered Restaurant entries are room-cleaning shifts.
+        # She should not be used as ordinary Restaurant replacement cover.
+        if (
+            department == Department.RESTAURANT
+            and pattern.employee.external_id == "224"
+        ):
+            continue
+
         availability = candidate_availability(
             roster=roster,
             employee=pattern.employee,
@@ -665,19 +720,48 @@ def rank_candidates(
             ),
         )
 
+        # Staff who previously gave up a shift and asked to keep
+        # their hours should be prioritised for suitable vacancies.
+        from apps.roster.models import ShiftResponse, ShiftResponseStatus
+
+        outstanding_hours = (
+            ShiftResponse.objects
+            .filter(
+                employee=pattern.employee,
+                shift__roster_week=roster,
+                status=ShiftResponseStatus.RESOLVED,
+                wants_replacement_shift=True,
+            )
+            .count()
+        )
+
+        reasons = candidate_reasons(
+            pattern=pattern,
+            weekday=weekday,
+            department=department,
+            signature=signature,
+            current_hours=current_hours.get(
+                (pattern.employee_id, department),
+                0.0,
+            ),
+            current_days=current_days.get(
+                (pattern.employee_id, department),
+                0,
+            ),
+            availability=availability,
+        )
+
+        if outstanding_hours:
+            score += 80
+            reasons.append(
+                "Would like replacement hours"
+            )
+
         ranked.append(
             {
                 "score": score,
                 "pattern": pattern,
-                "reasons": candidate_reasons(
-                    pattern=pattern,
-                    weekday=weekday,
-                    department=department,
-                    signature=signature,
-                    current_hours=current_hours.get((pattern.employee_id, department), 0.0),
-                    current_days=current_days.get((pattern.employee_id, department), 0),
-                    availability=availability,
-                ),
+                "reasons": reasons,
                 "possible_split": availability["possible_split"],
             }
         )

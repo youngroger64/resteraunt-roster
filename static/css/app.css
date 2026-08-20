@@ -317,3 +317,114 @@ code{background:#eef2f7;padding:2px 5px;border-radius:5px}
     cursor: pointer;
 }
 
+
+.roster-cell-editor {
+    display: grid;
+    gap: 5px;
+}
+
+.roster-cell-editor .cell-input {
+    width: 100%;
+    min-width: 90px;
+}
+
+.cell-edit-actions {
+    display: flex;
+    gap: 4px;
+    justify-content: center;
+}
+
+.cell-edit-actions .mini-btn {
+    padding: 4px 7px;
+    font-size: 11px;
+}
+
+.cell-off-btn {
+    opacity: .7;
+}
+
+.auto-cell-form {
+    width: 100%;
+}
+
+.cell-view {
+    width: 100%;
+    min-height: 40px;
+    padding: 6px 3px;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    font: inherit;
+    text-align: center;
+}
+
+.cell-view:hover {
+    background: rgba(0,0,0,.035);
+    border-radius: 7px;
+}
+
+.cell-shift-line {
+    display: block;
+    font-weight: 600;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.cell-off {
+    font-size: 11px;
+    opacity: .45;
+}
+
+.cell-inline-editor {
+    width: 100%;
+}
+
+.cell-inline-editor .cell-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 7px 4px;
+    text-align: center;
+    font-size: 12px;
+}
+
+.cell-inline-editor small {
+    display: block;
+    margin-top: 3px;
+    font-size: 9px;
+    opacity: .5;
+}
+
+.roster-start-options {
+    display: grid;
+    gap: 10px;
+    margin: 18px 0;
+}
+
+.roster-start-choice {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    cursor: pointer;
+}
+
+.roster-start-choice:hover {
+    background: rgba(0,0,0,.025);
+}
+
+.roster-start-choice input {
+    margin-top: 4px;
+    width: 18px;
+    height: 18px;
+}
+
+.roster-start-choice span {
+    display: grid;
+    gap: 3px;
+}
+
+.roster-start-choice small {
+    opacity: .65;
+}

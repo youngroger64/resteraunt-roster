@@ -51,13 +51,6 @@
     <div>{{ notice.message }}</div>
   {% endfor %}
 
-  <form method="post">
-    {% csrf_token %}
-    <input type="hidden" name="view_roster" value="yes">
-    <button type="submit" class="staff-notice-button">
-      View my roster
-    </button>
-  </form>
 </section>
 {% endif %}
 

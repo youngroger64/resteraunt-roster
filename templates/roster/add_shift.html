@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<div class="page-header">
+  <div>
+    <h1>Add shift</h1>
+    <p class="muted">{{ roster }}</p>
+  </div>
+</div>
+
+<form method="post" class="card form-card">
+  {% csrf_token %}
+
+  <label>
+    <strong>Employee</strong>
+    <select name="employee_id" required>
+      <option value="">Choose employee</option>
+      {% for employee in employees %}
+        <option value="{{ employee.pk }}">
+          {{ employee.full_name }}
+        </option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>
+    <strong>Date</strong>
+    <input type="date"
+           name="date"
+           min="{{ roster.week_start|date:'Y-m-d' }}"
+           max="{{ roster.week_end|date:'Y-m-d' }}"
+           required>
+  </label>
+
+  <label>
+    <strong>Area</strong>
+    <select name="department" required>
+      {% for value, label in departments %}
+        <option value="{{ value }}">{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>
+    <strong>Start</strong>
+    <input type="time"
+           name="start_time"
+           required>
+  </label>
+
+  <label>
+    <strong>Finish</strong>
+    <input type="time"
+           name="end_time"
+           required>
+  </label>
+
+  <div class="actions">
+    <button class="btn primary" type="submit">
+      Add shift
+    </button>
+
+    <a class="btn"
+       href="{% url 'roster:detail' roster.pk %}">
+      Cancel
+    </a>
+  </div>
+</form>
+
+{% endblock %}

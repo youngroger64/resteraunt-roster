@@ -1,11 +1,106 @@
 {% extends "base.html" %}
+
 {% block content %}
-<div class="page-header"><div><h1>Generate a week</h1><p class="muted">Choose the Monday. Copy the latest roster for the fastest start.</p></div></div>
-<form method="post" class="card form-card">{% csrf_token %}
-  {{ form.as_p }}
-  {% if latest %}
-  <label class="check"><input type="checkbox" name="copy_latest" checked> Copy {{ latest }}</label>
-  {% endif %}
-  <div class="actions"><button class="btn primary">Create draft</button><a class="btn" href="{% url 'roster:list' %}">Cancel</a></div>
+
+<div class="page-header">
+  <div>
+    <h1>Create roster</h1>
+    <p class="muted">
+      Choose the week and how you want to start.
+    </p>
+  </div>
+</div>
+
+<form method="post" class="card form-card">
+  {% csrf_token %}
+
+  <div class="form-row">
+    <label for="{{ form.week_start.id_for_label }}">
+      <strong>Week begins</strong>
+    </label>
+
+    {{ form.week_start }}
+
+    {% if form.week_start.errors %}
+      {{ form.week_start.errors }}
+    {% endif %}
+  </div>
+
+  <div class="roster-start-options">
+
+    <label class="roster-start-choice">
+      <input type="radio"
+             name="start_mode"
+             value="default"
+             {% if default_roster %}checked{% endif %}
+             {% if not default_roster %}disabled{% endif %}>
+
+      <span>
+        <strong>Default roster</strong>
+        <small>
+          {% if default_roster %}
+            Recommended — start from your normal week.
+          {% else %}
+            No default roster saved yet.
+          {% endif %}
+        </small>
+      </span>
+    </label>
+
+
+    <label class="roster-start-choice">
+      <input type="radio"
+             name="start_mode"
+             value="previous"
+             {% if not default_roster %}checked{% endif %}
+             {% if not latest_weekly %}disabled{% endif %}>
+
+      <span>
+        <strong>Previous week</strong>
+        <small>
+          {% if latest_weekly %}
+            Copy the most recent weekly roster.
+          {% else %}
+            No previous weekly roster available.
+          {% endif %}
+        </small>
+      </span>
+    </label>
+
+
+    <label class="roster-start-choice">
+      <input type="radio"
+             name="start_mode"
+             value="generated">
+
+      <span>
+        <strong>Generate from learning</strong>
+        <small>
+          Build a fresh roster from historic patterns,
+          current employee rules and availability.
+        </small>
+      </span>
+    </label>
+
+
+    <label class="roster-start-choice">
+      <input type="radio"
+             name="start_mode"
+             value="blank">
+
+      <span>
+        <strong>Blank roster</strong>
+        <small>
+          Start empty and enter the shifts yourself.
+        </small>
+      </span>
+    </label>
+
+  </div>
+
+  <button class="btn primary" type="submit">
+    Create draft
+  </button>
 </form>
+
 {% endblock %}
