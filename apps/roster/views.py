@@ -1032,6 +1032,13 @@ def roster_detail(request, pk):
         ).select_related("open_shift", "employee")
     )
 
+    manager_employee_choices = list(
+        Employee.objects
+        .filter(is_active=True)
+        .order_by("first_name", "last_name")
+        .values("id", "first_name", "last_name")
+    )
+
     return render(
         request,
         "roster/detail.html",
@@ -1048,6 +1055,7 @@ def roster_detail(request, pk):
             "shift_change_requests": shift_change_requests,
             "replacement_hour_requests": replacement_hour_requests,
             "open_shift_requests": open_shift_requests,
+            "manager_employee_choices": manager_employee_choices,
             "previous_week": roster.week_start - timedelta(days=7),
             "next_week": roster.week_start + timedelta(days=7),
         },

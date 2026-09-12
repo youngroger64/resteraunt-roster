@@ -16,9 +16,8 @@
       <span>Restaurant Roster</span>
     </a>
     <nav>
-      <a href="{% url 'dashboard:index' %}">Manage Roster</a>
+      <a href="{% url 'dashboard:index' %}">Home</a>
       <a href="{% url 'roster:list' %}">Roster History</a>
-      <a href="{% url 'employees:list' %}">Employees</a>
     </nav>
     <div class="sidebar-footer">
       {% if user.is_authenticated %}

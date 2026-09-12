@@ -61,7 +61,38 @@
         </div>
         {% endfor %}
       </div>
-      {% else %}<div class="alert warning">No learned-pattern candidate is currently available. Use the roster grid to rearrange manually.</div>{% endif %}
+      {% endif %}
+
+      <div class="manager-employee-choice">
+        <strong>Choose someone else</strong>
+        <p class="muted">Start typing a staff name.</p>
+
+        <form method="post"
+              class="manager-employee-choice-form"
+              data-roster-id="{{ roster.pk }}"
+              data-response-id="{{ item.response.pk }}">
+          {% csrf_token %}
+
+          <div class="manager-employee-search-wrap">
+            <input type="text"
+                   class="manager-employee-search"
+                   placeholder="Type employee name..."
+                   autocomplete="off">
+
+            <input type="hidden"
+                   class="manager-employee-id"
+                   value="">
+
+            <div class="manager-employee-results"></div>
+          </div>
+
+          <button type="submit"
+                  class="btn primary manager-move-selected"
+                  disabled>
+            Move shift
+          </button>
+        </form>
+      </div>
     </article>
   {% endfor %}
 
@@ -841,6 +872,104 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   });
 })();
+</script>
+
+{{ manager_employee_choices|json_script:"manager-employee-data" }}
+
+<script id="manager-employee-choice-script">
+document.addEventListener("DOMContentLoaded", function () {
+  const dataElement = document.getElementById("manager-employee-data");
+
+  if (!dataElement) return;
+
+  const employees = JSON.parse(dataElement.textContent);
+
+  document
+    .querySelectorAll(".manager-employee-choice-form")
+    .forEach(function (form) {
+
+      const search = form.querySelector(".manager-employee-search");
+      const hiddenId = form.querySelector(".manager-employee-id");
+      const results = form.querySelector(".manager-employee-results");
+      const submitButton = form.querySelector(".manager-move-selected");
+
+      function clearSelection() {
+        hiddenId.value = "";
+        submitButton.disabled = true;
+      }
+
+      function closeResults() {
+        results.innerHTML = "";
+      }
+
+      search.addEventListener("input", function () {
+        clearSelection();
+        closeResults();
+
+        const query = search.value.trim().toLowerCase();
+
+        if (!query) return;
+
+        const matches = employees
+          .filter(function (employee) {
+            const name = (
+              employee.first_name + " " + employee.last_name
+            ).trim().toLowerCase();
+
+            return name.includes(query);
+          })
+          .slice(0, 8);
+
+        matches.forEach(function (employee) {
+          const name = (
+            employee.first_name + " " + employee.last_name
+          ).trim();
+
+          const option = document.createElement("button");
+          option.type = "button";
+          option.className = "manager-employee-result";
+          option.textContent = name;
+
+          option.addEventListener("click", function () {
+            search.value = name;
+            hiddenId.value = employee.id;
+            submitButton.disabled = false;
+            closeResults();
+          });
+
+          results.appendChild(option);
+        });
+      });
+
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+
+        const employeeId = hiddenId.value;
+
+        if (!employeeId) return;
+
+        const rosterId = form.dataset.rosterId;
+        const responseId = form.dataset.responseId;
+
+        form.action =
+          "/rosters/" +
+          rosterId +
+          "/change-request/" +
+          responseId +
+          "/replace/" +
+          employeeId +
+          "/";
+
+        form.submit();
+      });
+
+      document.addEventListener("click", function (event) {
+        if (!form.contains(event.target)) {
+          closeResults();
+        }
+      });
+    });
+});
 </script>
 
 {% endblock %}

@@ -1412,3 +1412,83 @@ table td {
     display: block;
     width: 100%;
 }
+
+/* =========================================================
+   MANAGER MANUAL REPLACEMENT CHOICE
+   ========================================================= */
+
+.manager-employee-choice {
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid #d8c9a4;
+}
+
+.manager-employee-choice > strong {
+    color: #061d34;
+    font-size: 17px;
+}
+
+.manager-employee-choice-form {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.manager-employee-search-wrap {
+    position: relative;
+    width: min(360px, 100%);
+}
+
+.manager-employee-search {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    background: #fff;
+    border: 1px solid #c9b98d;
+    border-radius: 7px;
+    color: #061d34;
+    font: inherit;
+}
+
+.manager-employee-results {
+    position: absolute;
+    z-index: 2000;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+
+    background: #fffaf0;
+    border: 1px solid #c9b98d;
+    border-radius: 7px;
+    box-shadow: 0 8px 20px rgba(0,0,0,.14);
+    overflow: hidden;
+}
+
+.manager-employee-result {
+    display: block;
+    width: 100%;
+    padding: 9px 12px;
+
+    background: #fffaf0;
+    border: 0;
+    border-bottom: 1px solid #eee3c9;
+
+    color: #061d34;
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+}
+
+.manager-employee-result:last-child {
+    border-bottom: 0;
+}
+
+.manager-employee-result:hover {
+    background: #f3ead3;
+}
+
+.manager-move-selected:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+}
