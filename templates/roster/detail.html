@@ -28,7 +28,6 @@
 </div>
 
 
-
 {% if copied_issues %}
 
 {% endif %}
@@ -93,6 +92,43 @@
           </button>
         </form>
       </div>
+
+      {% if item.swap_choices %}
+      <div class="manager-employee-choice" style="margin-top:16px;">
+        <strong>Swap with another shift</strong>
+
+        <p class="muted">
+          Use this when two employees are exchanging their rostered shifts.
+        </p>
+
+        <form method="post"
+              action="{% url 'roster:swap_requested_shift' roster.pk item.response.pk %}"
+              onsubmit="return confirm('Swap these two published shifts? Both employees\' rosters will be updated.');">
+          {% csrf_token %}
+
+          <select name="other_shift_id" required
+                  style="max-width:520px; width:100%; margin-bottom:10px;">
+            <option value="">Choose a shift to swap with...</option>
+
+            {% for option in item.swap_choices %}
+              <option value="{{ option.shift.pk }}">
+                {{ option.employee.full_name }}
+                — {{ option.shift.date|date:"D d M" }}
+                — {{ option.shift.start_time|time:"H:i" }}–{{ option.shift.end_time|time:"H:i" }}
+                — {{ option.shift.get_department_display }}
+              </option>
+            {% endfor %}
+          </select>
+
+          <div>
+            <button class="btn" type="submit">
+              Swap shifts
+            </button>
+          </div>
+        </form>
+      </div>
+      {% endif %}
+
     </article>
   {% endfor %}
 

@@ -26,6 +26,7 @@ urlpatterns = [
     path("<int:pk>/open/<int:open_shift_id>/assign/", views.assign_open_shift, name="assign_open_shift"),
     path("<int:pk>/open/<int:open_shift_id>/assign/<int:employee_id>/", views.assign_suggested_employee, name="assign_suggested_employee"),
     path("<int:pk>/change-request/<int:response_id>/replace/<int:employee_id>/", views.replace_requested_shift, name="replace_requested_shift"),
+    path("<int:pk>/change-request/<int:response_id>/swap/", views.swap_requested_shift, name="swap_requested_shift"),
     path("<int:pk>/replacement-hours/<int:response_id>/dismiss/",
          views.dismiss_replacement_hours,
          name="dismiss_replacement_hours"),

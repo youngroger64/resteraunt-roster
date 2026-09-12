@@ -818,10 +818,46 @@ def roster_detail(request, pk):
             })
             if len(choices) == 5:
                 break
+        # Existing assigned shifts which could sensibly be exchanged
+        # with the shift this employee cannot work.
+        swap_choices = []
+
+        for candidate_shift in (
+            roster.shifts
+            .select_related("employee")
+            .exclude(pk=shift.pk)
+            .exclude(employee=response.employee)
+            .order_by(
+                "date",
+                "start_time",
+                "employee__first_name",
+                "employee__last_name",
+            )
+        ):
+            # Both employees must be capable of working the department
+            # they would receive after the swap.
+            if not compatible(
+                candidate_shift.employee,
+                shift.department,
+            ):
+                continue
+
+            if not compatible(
+                response.employee,
+                candidate_shift.department,
+            ):
+                continue
+
+            swap_choices.append({
+                "shift": candidate_shift,
+                "employee": candidate_shift.employee,
+            })
+
         shift_change_requests.append({
             "response": response,
             "shift": shift,
             "choices": choices,
+            "swap_choices": swap_choices,
         })
 
 
@@ -2259,6 +2295,290 @@ def use_replacement(request, pk, shift_id):
     )
 
     return redirect("roster:detail", pk=roster.pk)
+
+
+
+@login_required
+def swap_requested_shift(request, pk, response_id):
+    """
+    Manager-approved swap after an employee says they cannot work.
+
+    The original requested shift is exchanged with another existing
+    shift in the same roster. Both employees are notified when the
+    roster is published.
+    """
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+
+    roster = get_object_or_404(RosterWeek, pk=pk)
+
+    response = get_object_or_404(
+        ShiftResponse.objects.select_related(
+            "shift",
+            "employee",
+        ),
+        pk=response_id,
+        shift__roster_week=roster,
+        status=ShiftResponseStatus.CANNOT_WORK,
+    )
+
+    other_shift_id = request.POST.get("other_shift_id")
+
+    if not other_shift_id:
+        messages.error(
+            request,
+            "Choose the shift you want to swap with.",
+        )
+        return redirect("roster:detail", pk=pk)
+
+    original_shift = response.shift
+
+    other_shift = get_object_or_404(
+        Shift.objects.select_related("employee"),
+        pk=other_shift_id,
+        roster_week=roster,
+    )
+
+    if other_shift.pk == original_shift.pk:
+        messages.error(
+            request,
+            "A shift cannot be swapped with itself.",
+        )
+        return redirect("roster:detail", pk=pk)
+
+    original_employee = original_shift.employee
+    other_employee = other_shift.employee
+
+    if original_employee_id := getattr(
+        original_employee,
+        "id",
+        None,
+    ):
+        if original_employee_id == other_employee.id:
+            messages.error(
+                request,
+                "Choose a shift belonging to another employee.",
+            )
+            return redirect("roster:detail", pk=pk)
+
+    # Each employee must be capable of working the department
+    # they are about to receive.
+    if not compatible(
+        other_employee,
+        original_shift.department,
+    ):
+        messages.error(
+            request,
+            (
+                f"{other_employee.full_name} cannot work "
+                f"{original_shift.get_department_display()}."
+            ),
+        )
+        return redirect("roster:detail", pk=pk)
+
+    if not compatible(
+        original_employee,
+        other_shift.department,
+    ):
+        messages.error(
+            request,
+            (
+                f"{original_employee.full_name} cannot work "
+                f"{other_shift.get_department_display()}."
+            ),
+        )
+        return redirect("roster:detail", pk=pk)
+
+    original_display = (
+        f"{original_shift.date.strftime('%a %d %b')} · "
+        f"{original_shift.start_time.strftime('%H:%M')}–"
+        f"{original_shift.end_time.strftime('%H:%M')} · "
+        f"{original_shift.get_department_display()}"
+    )
+
+    other_display = (
+        f"{other_shift.date.strftime('%a %d %b')} · "
+        f"{other_shift.start_time.strftime('%H:%M')}–"
+        f"{other_shift.end_time.strftime('%H:%M')} · "
+        f"{other_shift.get_department_display()}"
+    )
+
+    # Check the proposed assignments while ignoring the two shifts
+    # involved in the swap. This catches clashes with third shifts.
+    def has_conflict(employee, proposed_shift, ignored_ids):
+        signature = (
+            f"{proposed_shift.start_time.strftime('%H:%M')}-"
+            f"{proposed_shift.end_time.strftime('%H:%M')}"
+        )
+
+        # candidate_availability sees the employee's current roster.
+        # Temporarily excluding the two swapped rows is easier and safer
+        # to calculate explicitly here.
+        from datetime import datetime, timedelta
+
+        def interval(day, start, end):
+            start_dt = datetime.combine(day, start)
+            end_dt = datetime.combine(day, end)
+            if end_dt <= start_dt:
+                end_dt += timedelta(days=1)
+            return start_dt, end_dt
+
+        proposed_start, proposed_end = interval(
+            proposed_shift.date,
+            proposed_shift.start_time,
+            proposed_shift.end_time,
+        )
+
+        existing = Shift.objects.filter(
+            roster_week=roster,
+            employee=employee,
+        ).exclude(pk__in=ignored_ids)
+
+        for existing_shift in existing:
+            existing_start, existing_end = interval(
+                existing_shift.date,
+                existing_shift.start_time,
+                existing_shift.end_time,
+            )
+
+            if (
+                proposed_start < existing_end
+                and existing_start < proposed_end
+            ):
+                return existing_shift
+
+        return None
+
+    ignored = [original_shift.pk, other_shift.pk]
+
+    conflict = has_conflict(
+        other_employee,
+        original_shift,
+        ignored,
+    )
+    if conflict:
+        messages.error(
+            request,
+            (
+                f"{other_employee.full_name} already has an "
+                f"overlapping shift on "
+                f"{conflict.date.strftime('%a %d %b')}."
+            ),
+        )
+        return redirect("roster:detail", pk=pk)
+
+    conflict = has_conflict(
+        original_employee,
+        other_shift,
+        ignored,
+    )
+    if conflict:
+        messages.error(
+            request,
+            (
+                f"{original_employee.full_name} already has an "
+                f"overlapping shift on "
+                f"{conflict.date.strftime('%a %d %b')}."
+            ),
+        )
+        return redirect("roster:detail", pk=pk)
+
+    # Avoid the employee/date/segment uniqueness constraint by using
+    # a transaction and temporarily moving one shift's segment.
+    with transaction.atomic():
+        original_segment = original_shift.segment
+        other_segment = other_shift.segment
+
+        temporary_segment = 999
+
+        while Shift.objects.filter(
+            roster_week=roster,
+            employee=original_employee,
+            date=original_shift.date,
+            segment=temporary_segment,
+        ).exists():
+            temporary_segment += 1
+
+        original_shift.segment = temporary_segment
+        original_shift.save(
+            update_fields=["segment", "updated_at"],
+        )
+
+        other_shift.employee = original_employee
+        other_shift.source = "manager_swap"
+        other_shift.notes = (
+            (other_shift.notes + " | ")
+            if other_shift.notes else ""
+        ) + f"Swapped with {other_employee.full_name}"
+        other_shift.save(
+            update_fields=[
+                "employee",
+                "source",
+                "notes",
+                "updated_at",
+            ],
+        )
+
+        original_shift.employee = other_employee
+        original_shift.segment = original_segment
+        original_shift.source = "manager_swap"
+        original_shift.notes = (
+            (original_shift.notes + " | ")
+            if original_shift.notes else ""
+        ) + f"Swapped with {original_employee.full_name}"
+        original_shift.save(
+            update_fields=[
+                "employee",
+                "segment",
+                "source",
+                "notes",
+                "updated_at",
+            ],
+        )
+
+        response.status = ShiftResponseStatus.RESOLVED
+        response.resolved_at = timezone.now()
+        response.resolved_by = request.user
+        response.save(
+            update_fields=[
+                "status",
+                "resolved_at",
+                "resolved_by",
+                "updated_at",
+            ],
+        )
+
+        if roster.status == RosterStatus.PUBLISHED:
+            StaffRosterNotice.objects.create(
+                employee=original_employee,
+                roster_week=roster,
+                message=(
+                    f"Roster changed: you now have "
+                    f"{other_display} instead of "
+                    f"{original_display}."
+                ),
+            )
+
+            StaffRosterNotice.objects.create(
+                employee=other_employee,
+                roster_week=roster,
+                message=(
+                    f"Roster changed: you now have "
+                    f"{original_display} instead of "
+                    f"{other_display}."
+                ),
+            )
+
+    messages.success(
+        request,
+        (
+            f"Shifts swapped between "
+            f"{original_employee.full_name} and "
+            f"{other_employee.full_name}."
+        ),
+    )
+
+    return redirect("roster:detail", pk=pk)
 
 
 @login_required

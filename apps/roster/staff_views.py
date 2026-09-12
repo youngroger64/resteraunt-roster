@@ -38,7 +38,7 @@ def staff_portal(request):
     """Employee-facing prototype that mirrors the clocking app's identify-once flow."""
     if request.method == "POST" and request.POST.get("reset_staff_session") == "yes":
         request.session.pop(SESSION_KEY, None)
-        return redirect("roster:staff")
+        return redirect("roster_staff:staff")
 
     employee = _staff_employee(request)
 
@@ -54,7 +54,7 @@ def staff_portal(request):
         ).update(seen_at=timezone.now())
 
         request.session["staff_roster_open"] = True
-        return redirect("roster:staff")
+        return redirect("roster_staff:staff")
 
 
     # UI-only clock state for this roster sandbox. It deliberately does not write
@@ -76,7 +76,7 @@ def staff_portal(request):
             messages.success(request, f"Test clock state: {next_state.replace('_', ' ').title()}.")
         else:
             messages.error(request, "That clock action is not valid from the current test state.")
-        return redirect("roster:staff")
+        return redirect("roster_staff:staff")
 
     if not employee and request.method == "POST":
         external_id = request.POST.get("employee_number", "").strip()
@@ -88,7 +88,7 @@ def staff_portal(request):
             messages.error(request, "Employee number not recognised.")
         else:
             request.session[SESSION_KEY] = employee.pk
-            return redirect("roster:staff")
+            return redirect("roster_staff:staff")
 
     if not employee:
         return render(request, "roster/staff_portal.html", {"employee": None})
@@ -202,7 +202,7 @@ def staff_portal(request):
 def staff_shift_response(request, shift_id):
     employee = _staff_employee(request)
     if not employee:
-        return redirect("roster:staff")
+        return redirect("roster_staff:staff")
 
     shift = get_object_or_404(
         Shift,
@@ -241,14 +241,14 @@ def staff_shift_response(request, shift_id):
             )
     else:
         messages.success(request, "Shift confirmed.")
-    return redirect("roster:staff")
+    return redirect("roster_staff:staff")
 
 
 @require_POST
 def staff_open_shift_request(request, open_shift_id):
     employee = _staff_employee(request)
     if not employee:
-        return redirect("roster:staff")
+        return redirect("roster_staff:staff")
     open_shift = get_object_or_404(
         OpenShift,
         pk=open_shift_id,
@@ -263,7 +263,7 @@ def staff_open_shift_request(request, open_shift_id):
     )
     if not availability["available"]:
         messages.error(request, f"That shift is no longer available to you: {availability['reason']}")
-        return redirect("roster:staff")
+        return redirect("roster_staff:staff")
 
     OpenShiftRequest.objects.update_or_create(
         open_shift=open_shift,
@@ -271,14 +271,14 @@ def staff_open_shift_request(request, open_shift_id):
         defaults={"status": OpenShiftRequestStatus.REQUESTED},
     )
     messages.success(request, "Shift requested. The manager can approve it from the roster.")
-    return redirect("roster:staff")
+    return redirect("roster_staff:staff")
 
 
 @require_POST
 def staff_availability(request):
     employee = _staff_employee(request)
     if not employee:
-        return redirect("roster:staff")
+        return redirect("roster_staff:staff")
 
     date_text = request.POST.get("date", "")
     try:
@@ -288,13 +288,13 @@ def staff_availability(request):
 
     if exception_date < date.today():
         messages.error(request, "Availability changes must be for today or a future date.")
-        return redirect("roster:staff")
+        return redirect("roster_staff:staff")
 
     mode = request.POST.get("mode")
     if mode == "clear":
         AvailabilityException.objects.filter(employee=employee, date=exception_date).delete()
         messages.success(request, "Normal availability restored for that date.")
-        return redirect("roster:staff")
+        return redirect("roster_staff:staff")
 
     if mode == "unavailable":
         defaults = {
@@ -308,7 +308,7 @@ def staff_availability(request):
         until_text = request.POST.get("available_until", "")
         if not from_text or not until_text:
             messages.error(request, "Choose both an available-from and available-until time.")
-            return redirect("roster:staff")
+            return redirect("roster_staff:staff")
         defaults = {
             "unavailable": False,
             "available_from": from_text,
@@ -324,4 +324,67 @@ def staff_availability(request):
         defaults=defaults,
     )
     messages.success(request, "Availability exception saved.")
-    return redirect("roster:staff")
+    return redirect("roster_staff:staff")
+
+
+def staff_handoff(request):
+    """
+    Securely accept an employee identity from the clocking application.
+
+    The token is short-lived and signed with the shared integration secret.
+    """
+    import os
+
+    from django.core import signing
+
+    token = (request.GET.get("token") or "").strip()
+
+    if not token:
+        messages.error(request, "Roster link was incomplete.")
+        return redirect("roster_staff:staff")
+
+    secret = os.environ.get("ROSTER_INTEGRATION_TOKEN", "").strip()
+
+    if not secret:
+        messages.error(request, "Roster integration is not configured.")
+        return redirect("roster_staff:staff")
+
+    signer = signing.TimestampSigner(
+        key=secret,
+        salt="localpulse-roster-staff-handoff-v1",
+    )
+
+    try:
+        employee_number = signer.unsign(
+            token,
+            max_age=300,
+        )
+    except signing.SignatureExpired:
+        messages.error(
+            request,
+            "That roster link has expired. Please open it again from the clock page.",
+        )
+        return redirect("roster_staff:staff")
+    except signing.BadSignature:
+        messages.error(request, "That roster link is not valid.")
+        return redirect("roster_staff:staff")
+
+    employee = Employee.objects.filter(
+        external_id=str(employee_number),
+        is_active=True,
+    ).first()
+
+    if not employee:
+        messages.error(
+            request,
+            "Your employee record could not be matched to the roster.",
+        )
+        return redirect("roster_staff:staff")
+
+    request.session[SESSION_KEY] = employee.pk
+
+    # Open the roster immediately after arriving from clocking.
+    request.session["staff_roster_open"] = True
+    request.session.modified = True
+
+    return redirect("roster_staff:staff")

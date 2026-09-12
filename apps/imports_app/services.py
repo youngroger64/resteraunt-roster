@@ -135,6 +135,16 @@ def _parse_clock(raw, suffix=""):
 
 def _normalise_chunk(value):
     text = value.lower().strip()
+
+    # Manager shorthand:
+    #   10.4.30 -> 10-4.30
+    # meaning 10:00 to 16:30 after normal AM/PM inference.
+    #
+    # Keep four-part forms such as 8.30.4.30 untouched; the
+    # existing rule below already handles those correctly.
+    if re.fullmatch(r"\d{1,2}\.\d{1,2}\.\d{2}", text):
+        first, second, minutes = text.split(".")
+        text = f"{first}-{second}.{minutes}"
     text = text.replace("—", "-").replace("–", "-").replace(" to ", "-")
     text = text.replace("midnight", "mn")
     text = re.sub(r"\s+", "", text)
@@ -342,6 +352,8 @@ def _employee_for_name(name, department):
         "eleonora matrosova": "231",
         "natalia moldovan": "234",
         "nataliia moldovan": "234",
+        "blaithnaid deegan": "223",
+        "blathnaid deegan": "223",
     }
 
     external_id = aliases.get(normalised.lower())

@@ -32,3 +32,16 @@ class ShiftParserTests(SimpleTestCase):
         parsed, error = parse_shift_cell("12.30")
         self.assertEqual(parsed, [])
         self.assertIsNotNone(error)
+
+
+class ManagerShorthandRegressionTests(SimpleTestCase):
+    def test_three_part_manager_shorthand(self):
+        parsed, error = parse_shift_cell("10.4.30")
+
+        self.assertIsNone(error)
+        self.assertEqual(len(parsed), 1)
+
+        start, end = parsed[0]
+
+        self.assertEqual((start.hour, start.minute), (10, 0))
+        self.assertEqual((end.hour, end.minute), (16, 30))
