@@ -535,3 +535,39 @@ class OpenShiftRequest(TimeStampedModel):
 
     def __str__(self):
         return f"{self.employee}: {self.open_shift} — {self.get_status_display()}"
+
+
+class UnresolvedShift(TimeStampedModel):
+    roster_week = models.ForeignKey(
+        RosterWeek,
+        on_delete=models.CASCADE,
+        related_name="unresolved_shifts",
+    )
+    employee = models.ForeignKey(
+        Employee,
+        on_delete=models.CASCADE,
+        related_name="unresolved_roster_shifts",
+    )
+    date = models.DateField()
+    department = models.CharField(
+        max_length=20,
+        choices=Department.choices,
+    )
+    suggested_start_time = models.TimeField(null=True, blank=True)
+    suggested_end_time = models.TimeField(null=True, blank=True)
+    reason = models.CharField(max_length=250, blank=True)
+
+    class Meta:
+        ordering = ["date", "employee__first_name", "employee__last_name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["roster_week", "employee", "date", "department"],
+                name="unique_unresolved_roster_shift",
+            )
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.employee.full_name} · {self.date} · "
+            f"{self.get_department_display()}"
+        )

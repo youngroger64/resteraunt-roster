@@ -32,8 +32,6 @@ def roster(request):
             messages.error(request, "No readable date. Choose a Monday below, or choose another file.")
             return render(request, "imports/upload_roster.html", {"form":form})
         messages.success(request, f"Imported {count} shift segments.")
-        if issues:
-            messages.warning(request, f"{len(issues)} cells were unclear and left blank. Choose: edit them, or leave them OFF.")
         return redirect("roster:detail", pk=roster_week.pk)
     return render(request, "imports/upload_roster.html", {"form":form})
 

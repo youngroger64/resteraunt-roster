@@ -1,8 +1,47 @@
 {% extends "base.html" %}
+
+{% block title %}Upload Roster{% endblock %}
+
 {% block content %}
-<div class="page-header"><div><h1>Import roster</h1><p class="muted">Choose whether this file teaches the app or becomes the base.</p></div></div>
-<form method="post" enctype="multipart/form-data" class="card form-card">{% csrf_token %}
-{{ form.as_p }}
-<button class="btn primary">Import</button>
+
+<div class="page-header">
+  <div>
+    <h1>Upload Roster</h1>
+    <p class="muted">
+      Choose the Excel roster file. The week will be read automatically.
+    </p>
+  </div>
+</div>
+
+<form method="post"
+      enctype="multipart/form-data"
+      class="card form-card roster-upload-simple">
+
+  {% csrf_token %}
+
+  {{ form.purpose }}
+  {{ form.week_start }}
+
+  {% if form.non_field_errors %}
+    {{ form.non_field_errors }}
+  {% endif %}
+
+  <div class="roster-file-field">
+    <label for="{{ form.file.id_for_label }}">
+      Choose Excel file
+    </label>
+
+    {{ form.file }}
+
+    {% if form.file.errors %}
+      {{ form.file.errors }}
+    {% endif %}
+  </div>
+
+  <button type="submit" class="btn primary">
+    Upload roster
+  </button>
+
 </form>
+
 {% endblock %}

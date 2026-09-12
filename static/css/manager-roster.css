@@ -1,0 +1,1414 @@
+:root {
+    --page-bg: #edf2ec;
+    --page-bg-deep: #e4ebe2;
+
+    --surface: #ffffff;
+    --surface-soft: #f8faf8;
+
+    --text: #06152b;
+    --text-soft: #475467;
+    --text-faint: #667085;
+
+    --border: #dbe3dc;
+    --border-strong: #cbd5ce;
+
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+
+    --secondary: #4b5563;
+
+    --success: #087f3f;
+    --warning: #b7791f;
+    --danger: #b42318;
+
+    --radius: 13px;
+    --radius-small: 8px;
+
+    --shadow:
+        0 1px 2px rgba(16, 24, 40, 0.04),
+        0 4px 12px rgba(16, 24, 40, 0.035);
+}
+
+
+/* =========================================================
+   GLOBAL
+   ========================================================= */
+
+body {
+    font-family:
+        Arial,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        Roboto,
+        Helvetica,
+        sans-serif;
+
+    background:
+        linear-gradient(
+            180deg,
+            var(--page-bg) 0%,
+            #f4f6f3 420px,
+            #f4f6f3 100%
+        );
+
+    color: var(--text);
+}
+
+
+/* =========================================================
+   MANAGER ROSTER PAGE
+   ========================================================= */
+
+.manager-roster-page {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 12px 4px 50px;
+}
+
+
+.manager-roster-intro {
+    margin-bottom: 24px;
+}
+
+.manager-roster-intro h1 {
+    margin: 0;
+    color: var(--text);
+    font-size: 32px;
+    line-height: 1.15;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+}
+
+.manager-roster-intro p {
+    margin: 8px 0 0;
+    color: var(--text-soft);
+    font-size: 15px;
+    line-height: 1.55;
+}
+
+
+/* =========================================================
+   WEEK SELECTOR
+   ========================================================= */
+
+.week-selector {
+    display: grid;
+    grid-template-columns: 54px 1fr 54px;
+    align-items: center;
+    gap: 18px;
+
+    padding: 20px 22px;
+    margin-bottom: 18px;
+
+    background: rgba(255,255,255,0.94);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+}
+
+.week-selector-main {
+    text-align: center;
+}
+
+.week-selector-label {
+    display: block;
+    margin-bottom: 4px;
+
+    color: var(--text-faint);
+    font-size: 11px;
+    line-height: 1.2;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+}
+
+.week-selector-date {
+    color: var(--text);
+    font-size: 24px;
+    line-height: 1.25;
+    font-weight: 700;
+}
+
+.week-arrow {
+    width: 46px;
+    height: 46px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 9px;
+
+    color: var(--text);
+    text-decoration: none;
+    font-size: 28px;
+    line-height: 1;
+
+    transition:
+        background 0.15s ease,
+        border-color 0.15s ease,
+        transform 0.15s ease;
+}
+
+.week-arrow:hover {
+    background: var(--surface-soft);
+    border-color: #aebbb1;
+    transform: translateY(-1px);
+}
+
+
+/* =========================================================
+   CREATE PANEL
+   ========================================================= */
+
+.roster-create-panel {
+    overflow: hidden;
+
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+}
+
+.roster-create-heading {
+    padding: 24px 26px 20px;
+
+    background:
+        linear-gradient(
+            135deg,
+            #f7faf7 0%,
+            #edf3ec 100%
+        );
+
+    border-bottom: 1px solid var(--border);
+}
+
+.roster-create-heading h2 {
+    margin: 0;
+    color: var(--text);
+    font-size: 22px;
+    line-height: 1.25;
+    font-weight: 700;
+}
+
+.roster-create-heading p {
+    margin: 6px 0 0;
+    color: var(--text-soft);
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+
+.roster-create-options {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+
+    padding: 22px 26px 26px;
+}
+
+
+/* =========================================================
+   ACTION CARDS
+   ========================================================= */
+
+.roster-choice {
+    min-height: 88px;
+
+    display: flex;
+    align-items: center;
+    gap: 15px;
+
+    padding: 18px 19px;
+
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 11px;
+
+    color: var(--text);
+    text-decoration: none;
+    text-align: left;
+
+    cursor: pointer;
+
+    transition:
+        border-color 0.15s ease,
+        background 0.15s ease,
+        box-shadow 0.15s ease,
+        transform 0.15s ease;
+}
+
+.roster-choice:hover {
+    background: #fafcfa;
+    border-color: #adbbae;
+    box-shadow: 0 4px 12px rgba(16,24,40,0.06);
+    transform: translateY(-1px);
+}
+
+.roster-choice-primary {
+    background: #f7faff;
+    border-color: #b8cdfa;
+}
+
+.roster-choice-primary:hover {
+    background: #f0f6ff;
+    border-color: #7aa2f7;
+}
+
+
+.roster-choice-icon {
+    width: 42px;
+    height: 42px;
+
+    flex: 0 0 42px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    background: #edf2ec;
+    border-radius: 9px;
+
+    color: var(--text);
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.roster-choice-primary .roster-choice-icon {
+    background: #dbeafe;
+    color: #1e40af;
+}
+
+
+.roster-choice-text {
+    min-width: 0;
+}
+
+.roster-choice-title {
+    display: block;
+
+    color: var(--text);
+    font-size: 15px;
+    line-height: 1.3;
+    font-weight: 700;
+}
+
+.roster-choice-note {
+    display: block;
+    margin-top: 4px;
+
+    color: var(--text-soft);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+
+/* =========================================================
+   MOBILE
+   ========================================================= */
+
+@media (max-width: 760px) {
+
+    .manager-roster-page {
+        padding-top: 4px;
+    }
+
+    .manager-roster-intro h1 {
+        font-size: 28px;
+    }
+
+    .week-selector {
+        grid-template-columns: 46px 1fr 46px;
+        gap: 9px;
+        padding: 16px;
+    }
+
+    .week-selector-date {
+        font-size: 19px;
+    }
+
+    .week-arrow {
+        width: 42px;
+        height: 42px;
+    }
+
+    .roster-create-options {
+        grid-template-columns: 1fr;
+        padding: 18px;
+    }
+
+    .roster-create-heading {
+        padding: 20px;
+    }
+}
+
+
+/* =========================================================
+   WEEK NAVIGATION — TEXT + ARROWS
+   ========================================================= */
+
+.week-nav-button {
+    min-height: 50px;
+    padding: 0 16px;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+
+    background: #eef3ed;
+    border: 1px solid #d4ddd5;
+    border-radius: 10px;
+
+    color: #173f31;
+    text-decoration: none;
+
+    font-size: 14px;
+    font-weight: 700;
+
+    transition:
+        background 0.15s ease,
+        border-color 0.15s ease,
+        transform 0.15s ease;
+}
+
+.week-nav-button:hover {
+    background: #e6ede5;
+    border-color: #bccabb;
+    transform: translateY(-1px);
+}
+
+.week-nav-arrow {
+    font-size: 25px;
+    line-height: 1;
+    font-weight: 400;
+}
+
+
+/* =========================================================
+   CREATE OPTIONS — THREE ACTIONS
+   ========================================================= */
+
+.roster-create-options-three {
+    grid-template-columns: 1fr 1fr;
+}
+
+.roster-choice-form {
+    margin: 0;
+    padding: 0;
+}
+
+.roster-choice-form .roster-choice {
+    width: 100%;
+    height: 100%;
+    font-family: inherit;
+}
+
+
+/* make the third action sit neatly beneath the first */
+.roster-create-options-three .roster-choice-form:last-child {
+    grid-column: 1 / 2;
+}
+
+
+/* =========================================================
+   RESPONSIVE WEEK NAV
+   ========================================================= */
+
+@media (max-width: 760px) {
+
+    .week-selector {
+        grid-template-columns: 1fr;
+        gap: 12px;
+    }
+
+    .week-selector-main {
+        order: 1;
+    }
+
+    .week-nav-button:first-child {
+        order: 2;
+    }
+
+    .week-nav-button:last-child {
+        order: 3;
+    }
+
+    .roster-create-options-three {
+        grid-template-columns: 1fr;
+    }
+
+    .roster-create-options-three .roster-choice-form:last-child {
+        grid-column: auto;
+    }
+}
+
+
+/* =========================================================
+   O'CONNELL'S / CLOCKING APP VISUAL SYSTEM
+   Dashboard / Create Roster
+   ========================================================= */
+
+body {
+    background: #5f6d59 !important;
+    color: #061d34 !important;
+
+    font-family:
+        Georgia,
+        "Times New Roman",
+        Times,
+        serif !important;
+}
+
+
+/* Main working surface */
+.manager-roster-page {
+    max-width: 1180px;
+    margin: 22px auto 50px;
+    padding: 30px 28px 40px;
+
+    background: #f8f1dc;
+    border-radius: 16px 16px 0 0;
+}
+
+
+/* =========================================================
+   PAGE TITLE
+   ========================================================= */
+
+.manager-roster-intro {
+    margin-bottom: 26px;
+}
+
+.manager-roster-intro h1 {
+    margin: 0;
+
+    color: #061d34;
+
+    font-family:
+        Georgia,
+        "Times New Roman",
+        Times,
+        serif;
+
+    font-size: 42px;
+    line-height: 1.05;
+    font-weight: 700;
+    letter-spacing: -0.7px;
+}
+
+.manager-roster-intro p {
+    margin: 10px 0 0;
+
+    color: #172334;
+
+    font-family:
+        Georgia,
+        "Times New Roman",
+        Times,
+        serif;
+
+    font-size: 17px;
+    line-height: 1.4;
+}
+
+
+/* =========================================================
+   WEEK NAVIGATION
+   ========================================================= */
+
+.week-selector {
+    display: grid;
+    grid-template-columns: 190px 1fr 190px;
+    align-items: center;
+    gap: 24px;
+
+    padding: 18px 0;
+    margin: 0 0 24px;
+
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+}
+
+
+.week-selector-main {
+    text-align: center;
+}
+
+
+.week-selector-label {
+    margin-bottom: 6px;
+
+    color: #5f6d59;
+
+    font-family:
+        Georgia,
+        "Times New Roman",
+        Times,
+        serif;
+
+    font-size: 12px;
+    font-weight: 700;
+
+    text-transform: uppercase;
+    letter-spacing: 1.4px;
+}
+
+
+.week-selector-date {
+    color: #061d34;
+
+    font-family:
+        Georgia,
+        "Times New Roman",
+        Times,
+        serif;
+
+    font-size: 25px;
+    font-weight: 700;
+}
+
+
+.week-nav-button {
+    min-height: 46px;
+    padding: 0 16px;
+
+    background: #40506a;
+    border: 0;
+    border-radius: 9px;
+
+    box-shadow:
+        0 5px 10px rgba(0,0,0,0.16);
+
+    color: #fff7df;
+
+    font-family:
+        Georgia,
+        "Times New Roman",
+        Times,
+        serif;
+
+    font-size: 16px;
+    font-weight: 700;
+
+    text-decoration: none;
+}
+
+
+.week-nav-button:first-child {
+    justify-self: start;
+}
+
+
+.week-nav-button:last-child {
+    justify-self: end;
+}
+
+
+.week-nav-button:hover {
+    background: #061d34;
+    border: 0;
+
+    transform: translateY(-1px);
+}
+
+
+.week-nav-arrow {
+    font-size: 22px;
+    line-height: 1;
+}
+
+
+/* =========================================================
+   CREATE ROSTER PANEL
+   ========================================================= */
+
+.roster-create-panel {
+    overflow: hidden;
+
+    background: #f8f1dc;
+
+    border: 1px solid #d8c9a4;
+    border-radius: 13px;
+
+    box-shadow: none;
+}
+
+
+.roster-create-heading {
+    padding: 15px 20px;
+
+    background: #061d34;
+
+    border: 0;
+}
+
+
+.roster-create-heading h2 {
+    margin: 0;
+
+    color: #fff7df;
+
+    font-family:
+        Georgia,
+        "Times New Roman",
+        Times,
+        serif;
+
+    font-size: 26px;
+    font-weight: 700;
+}
+
+
+.roster-create-heading p {
+    margin: 5px 0 0;
+
+    color: #f4ead0;
+
+    font-family:
+        Georgia,
+        "Times New Roman",
+        Times,
+        serif;
+
+    font-size: 15px;
+}
+
+
+/* =========================================================
+   ROSTER ACTIONS
+   ========================================================= */
+
+.roster-create-options,
+.roster-create-options-three {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+
+    padding: 22px;
+
+    background: #f8f1dc;
+}
+
+
+.roster-choice,
+.roster-choice-form .roster-choice {
+    min-height: 74px;
+
+    display: flex;
+    align-items: center;
+    gap: 14px;
+
+    padding: 16px 18px;
+
+    background: #fffaf0;
+
+    border: 1px solid #d8c9a4;
+    border-radius: 10px;
+
+    box-shadow: none;
+
+    color: #061d34;
+
+    font-family:
+        Georgia,
+        "Times New Roman",
+        Times,
+        serif;
+
+    text-decoration: none;
+}
+
+
+.roster-choice:hover,
+.roster-choice-form .roster-choice:hover {
+    background: #fffdf7;
+    border-color: #a99971;
+
+    transform: translateY(-1px);
+}
+
+
+/* Primary action — same dark green family as clocking app */
+.roster-choice-primary,
+.roster-choice-form .roster-choice-primary {
+    background: #064f3d;
+    border-color: #064f3d;
+
+    color: #fff7df;
+
+    box-shadow:
+        0 4px 8px rgba(0,0,0,0.13);
+}
+
+
+.roster-choice-primary:hover,
+.roster-choice-form .roster-choice-primary:hover {
+    background: #043f31;
+    border-color: #043f31;
+}
+
+
+.roster-choice-title {
+    color: inherit;
+
+    font-family:
+        Georgia,
+        "Times New Roman",
+        Times,
+        serif;
+
+    font-size: 16px;
+    font-weight: 700;
+}
+
+
+/* Icon blocks */
+.roster-choice-icon {
+    width: 40px;
+    height: 40px;
+
+    flex: 0 0 40px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    background: #e8eadf;
+    border-radius: 7px;
+
+    color: #061d34;
+
+    font-family: Arial, sans-serif;
+    font-size: 20px;
+    font-weight: 700;
+}
+
+
+.roster-choice-primary .roster-choice-icon {
+    background: rgba(255,255,255,0.14);
+    color: #fff7df;
+}
+
+
+/* =========================================================
+   MOBILE
+   ========================================================= */
+
+@media (max-width: 760px) {
+
+    .manager-roster-page {
+        margin: 0;
+        padding: 22px 16px 35px;
+        border-radius: 0;
+    }
+
+    .manager-roster-intro h1 {
+        font-size: 34px;
+    }
+
+    .week-selector {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .week-selector-main {
+        grid-column: 1 / -1;
+        grid-row: 1;
+    }
+
+    .week-nav-button:first-child {
+        grid-column: 1;
+        grid-row: 2;
+    }
+
+    .week-nav-button:last-child {
+        grid-column: 2;
+        grid-row: 2;
+    }
+
+    .roster-create-options,
+    .roster-create-options-three {
+        grid-template-columns: 1fr;
+    }
+
+    .roster-create-options-three .roster-choice-form:last-child {
+        grid-column: auto;
+    }
+}
+
+
+/* =========================================================
+   ROSTER EDIT / PUBLISH PAGE — CLEAN CLOCKING STYLE
+   ========================================================= */
+
+/*
+   The body remains sage.
+   The actual working area is warm cream.
+*/
+
+body {
+    background: #5f6d59 !important;
+}
+
+
+/* Main Django content area */
+main,
+.main-content,
+.content {
+    background: #f8f1dc;
+}
+
+
+/* ---------------------------------------------------------
+   WEEK NAVIGATION AT TOP
+   --------------------------------------------------------- */
+
+.simplified-roster-header {
+    margin-top: 8px;
+}
+
+.simplified-roster-header h1 {
+    color: #061d34 !important;
+    font-family: Georgia, "Times New Roman", serif !important;
+}
+
+
+/* ---------------------------------------------------------
+   CARDS
+   --------------------------------------------------------- */
+
+.card {
+    background: #fffaf0 !important;
+    border: 1px solid #d8c9a4 !important;
+    border-radius: 10px !important;
+    box-shadow: none !important;
+}
+
+.card h1,
+.card h2,
+.card h3 {
+    color: #061d34 !important;
+    font-family: Georgia, "Times New Roman", serif !important;
+}
+
+
+/* ---------------------------------------------------------
+   QUICK EDITS
+   Make it quieter than the roster itself.
+   --------------------------------------------------------- */
+
+.card:first-of-type {
+    background: #f8f1dc !important;
+    border-color: #d8c9a4 !important;
+}
+
+.card:first-of-type h2 {
+    font-size: 22px !important;
+    margin-bottom: 4px !important;
+}
+
+
+/* ---------------------------------------------------------
+   ROSTER TABLE
+   --------------------------------------------------------- */
+
+.roster-table,
+.roster-grid,
+table {
+    background: #fffaf0 !important;
+}
+
+
+/* Navy header row */
+.roster-table thead th,
+.roster-grid thead th,
+table thead th {
+    background: #061d34 !important;
+    color: #fff7df !important;
+
+    border-color: #263a4d !important;
+
+    font-family: Georgia, "Times New Roman", serif !important;
+    font-weight: 700 !important;
+}
+
+
+/* Normal roster cells */
+.roster-table td,
+.roster-grid td,
+table td {
+    background: #fffdf7 !important;
+    color: #061d34 !important;
+
+    border-color: #ded3b8 !important;
+}
+
+
+/* Employee name column */
+.roster-table td:first-child,
+.roster-grid td:first-child {
+    background: #fbf3df !important;
+    font-weight: 700;
+}
+
+
+/* ---------------------------------------------------------
+   DEPARTMENT HEADINGS
+   --------------------------------------------------------- */
+
+.department-row td,
+.department-heading,
+.roster-department {
+    background: #e7eadf !important;
+    color: #173f31 !important;
+
+    font-family: Georgia, "Times New Roman", serif !important;
+    font-weight: 700 !important;
+}
+
+
+/* ---------------------------------------------------------
+   INPUTS / EDITABLE CELLS
+   --------------------------------------------------------- */
+
+.roster-table input,
+.roster-grid input,
+.roster-table select,
+.roster-grid select {
+    background: #ffffff !important;
+    color: #061d34 !important;
+
+    border: 1px solid #d8c9a4 !important;
+    border-radius: 5px !important;
+}
+
+.roster-table input:focus,
+.roster-grid input:focus {
+    border-color: #40506a !important;
+
+    outline: 2px solid rgba(64,80,106,0.12) !important;
+    outline-offset: 0;
+}
+
+
+/* ---------------------------------------------------------
+   BUTTONS
+   --------------------------------------------------------- */
+
+.btn {
+    font-family: Georgia, "Times New Roman", serif !important;
+}
+
+
+/* ordinary buttons = navy/cream */
+.btn:not(.primary) {
+    background: #fffaf0 !important;
+    border: 1px solid #b8aa89 !important;
+
+    color: #061d34 !important;
+
+    box-shadow: none !important;
+}
+
+.btn:not(.primary):hover {
+    background: #f3ead3 !important;
+    border-color: #887b5f !important;
+}
+
+
+/* Publish = green. This should be the strongest action. */
+.btn.primary {
+    background: #064f3d !important;
+    border-color: #064f3d !important;
+
+    color: #fff7df !important;
+
+    box-shadow: 0 3px 7px rgba(0,0,0,0.13) !important;
+}
+
+.btn.primary:hover {
+    background: #043f31 !important;
+    border-color: #043f31 !important;
+}
+
+
+/* ---------------------------------------------------------
+   MUTED / SUPPORTING TEXT
+   --------------------------------------------------------- */
+
+.muted {
+    color: #66705f !important;
+}
+
+
+/* ---------------------------------------------------------
+   STAFF REQUESTS
+   --------------------------------------------------------- */
+
+.manager-attention {
+    background: #fffaf0 !important;
+}
+
+.attention-item {
+    border-color: #d8c9a4 !important;
+}
+
+
+/* ---------------------------------------------------------
+   MORE MENU
+   --------------------------------------------------------- */
+
+.manager-more-menu {
+    background: #fffaf0 !important;
+    border-color: #d8c9a4 !important;
+    color: #061d34 !important;
+}
+
+.manager-more-menu a,
+.manager-more-menu button {
+    color: #061d34 !important;
+}
+
+
+/* ---------------------------------------------------------
+   PAGE HEADER
+   --------------------------------------------------------- */
+
+.page-header {
+    border-color: #d8c9a4 !important;
+}
+
+.page-header h1 {
+    color: #061d34 !important;
+    font-family: Georgia, "Times New Roman", serif !important;
+}
+
+
+/* Navy section bars on roster manager */
+.manager-section-title {
+    background: #061d34 !important;
+    color: #fff7df !important;
+    margin: -1px -1px 18px -1px !important;
+    padding: 12px 18px !important;
+    border-radius: 9px 9px 0 0 !important;
+    font-family: Georgia, "Times New Roman", serif !important;
+    font-size: 22px !important;
+    line-height: 1.2 !important;
+}
+
+
+/* Full previous/next week buttons */
+.week-nav-btn {
+    min-width: 150px;
+    text-align: center;
+    padding: 12px 18px !important;
+    font-weight: 700 !important;
+}
+
+/* =========================================================
+   WEEK NAVIGATION — PAYROLL STYLE
+   ========================================================= */
+
+.week-nav-row {
+    display: grid !important;
+    grid-template-columns: 1fr auto 1fr !important;
+    align-items: center !important;
+    gap: 28px !important;
+    width: 100% !important;
+    margin: 10px 0 30px !important;
+}
+
+.week-nav-row .week-nav-btn {
+    min-width: 165px !important;
+    padding: 12px 20px !important;
+
+    background: #061d34 !important;
+    border: 1px solid #061d34 !important;
+    color: #fff7df !important;
+
+    font-family: Georgia, "Times New Roman", serif !important;
+    font-weight: 700 !important;
+    text-align: center !important;
+
+    box-shadow: 0 4px 9px rgba(0,0,0,0.16) !important;
+}
+
+.week-nav-row .week-nav-btn:first-child {
+    justify-self: start !important;
+}
+
+.week-nav-row .week-nav-btn:last-child {
+    justify-self: end !important;
+}
+
+.week-nav-row .week-nav-btn:hover {
+    background: #0b2945 !important;
+    border-color: #0b2945 !important;
+    color: #fff7df !important;
+}
+
+.week-nav-center {
+    text-align: center !important;
+    white-space: nowrap !important;
+}
+
+.week-nav-label {
+    font-size: 13px !important;
+    margin-bottom: 4px !important;
+}
+
+.week-nav-date {
+    margin: 0 !important;
+    color: #061d34 !important;
+    font-family: Georgia, "Times New Roman", serif !important;
+}
+
+
+/* Make sure navy section heading text stays visible */
+.manager-section-title,
+.card .manager-section-title,
+.manager-attention .manager-section-title {
+    background: #061d34 !important;
+    color: #fff7df !important;
+}
+
+
+
+/* =========================================================
+   ROSTER CELL SHIFT EDITOR
+   ========================================================= */
+
+.shift-cell {
+    position: relative;
+}
+
+.cell-view {
+    cursor: pointer;
+}
+
+.cell-inline-editor {
+    position: absolute;
+    z-index: 1000;
+
+    top: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+
+    width: 340px;
+    padding: 16px;
+
+    background: #fffaf0;
+    border: 1px solid #b8aa89;
+    border-radius: 9px;
+
+    box-shadow: 0 10px 30px rgba(0,0,0,0.22);
+
+    text-align: left;
+}
+
+.shift-editor-title {
+    margin-bottom: 12px;
+
+    color: #061d34;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.shift-editor-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 30px;
+    gap: 8px;
+    align-items: end;
+
+    margin-bottom: 10px;
+}
+
+.shift-editor-row label span {
+    display: block;
+    margin-bottom: 4px;
+
+    color: #5f665b;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.shift-editor-row input {
+    width: 100%;
+    box-sizing: border-box;
+
+    padding: 9px 8px;
+
+    background: #fff;
+    border: 1px solid #c9bea2;
+    border-radius: 5px;
+
+    font-size: 15px;
+}
+
+.remove-shift-row {
+    height: 38px;
+
+    background: transparent;
+    border: 0;
+
+    color: #8b3434;
+    cursor: pointer;
+
+    font-size: 22px;
+}
+
+.add-shift-row {
+    padding: 6px 0;
+
+    background: transparent;
+    border: 0;
+
+    color: #064f3d;
+    cursor: pointer;
+
+    font-family: Georgia, "Times New Roman", serif;
+    font-weight: 700;
+}
+
+.shift-editor-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    margin-top: 14px;
+    padding-top: 12px;
+
+    border-top: 1px solid #ded3b8;
+}
+
+.shift-editor-spacer {
+    flex: 1;
+}
+
+.shift-editor-error {
+    margin-top: 10px;
+
+    color: #8b3434;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+
+/* Shift editor time-format guidance */
+.shift-time-hint {
+    margin: 4px 0 14px;
+    padding: 9px 10px;
+    background: #f4ecd7;
+    border-radius: 6px;
+    color: #5f6258;
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.shift-time-hint code {
+    color: #061d34;
+    font-weight: 700;
+}
+
+.roster-editing-hint {
+    margin: 0 0 12px;
+    padding: 10px 14px;
+    background: #f4ecd7;
+    border: 1px solid #d8c9a4;
+    border-radius: 7px;
+    color: #5f6258;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.roster-editing-hint strong,
+.roster-editing-hint code {
+    color: #061d34;
+}
+
+.roster-editing-hint code {
+    font-weight: 700;
+}
+
+/* Roster employee visibility control */
+.roster-employee-toggle {
+    display: flex;
+    justify-content: flex-end;
+    margin: 0 0 12px;
+}
+
+.roster-show-employees {
+    background: #fffaf0 !important;
+    border: 1px solid #b8aa89 !important;
+    color: #061d34 !important;
+    font-family: Georgia, "Times New Roman", serif !important;
+    font-weight: 700 !important;
+    padding: 9px 14px !important;
+}
+
+.roster-show-employees strong {
+    margin-left: 7px;
+    font-size: 18px;
+}
+
+/* Bottom publish/send action */
+.roster-send-area {
+    display: flex;
+    justify-content: flex-end;
+    margin: 22px 0 8px;
+}
+
+.roster-send-button {
+    background: #064f3d !important;
+    border: 1px solid #064f3d !important;
+    color: #fffaf0 !important;
+    font-family: Georgia, "Times New Roman", serif !important;
+    font-size: 18px !important;
+    font-weight: 700 !important;
+    padding: 13px 24px !important;
+    min-width: 260px;
+}
+
+.roster-send-button:hover {
+    background: #0a624c !important;
+}
+
+.roster-sent-status {
+    margin: 22px 0 8px;
+    padding: 12px 16px;
+    background: #edf1e8;
+    border: 1px solid #b9c5ae;
+    border-radius: 7px;
+    color: #064f3d;
+    font-family: Georgia, "Times New Roman", serif;
+    font-weight: 700;
+    text-align: right;
+}
+
+/* Simple manager roster upload */
+.roster-upload-simple {
+    max-width: 650px;
+}
+
+.roster-file-field {
+    margin-bottom: 20px;
+}
+
+.roster-file-field label {
+    display: block;
+    margin-bottom: 8px;
+    color: #061d34;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.roster-file-field input[type="file"] {
+    display: block;
+    width: 100%;
+}

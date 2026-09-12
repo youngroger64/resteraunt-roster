@@ -4,6 +4,8 @@ from apps.core.models import TimeStampedModel
 class Department(models.TextChoices):
     RESTAURANT = "restaurant", "Restaurant"
     BAR = "bar", "Bar"
+    KITCHEN = "kitchen", "Kitchen"
+    WASHUP = "washup", "Wash up"
 
 class Employee(TimeStampedModel):
     external_id = models.CharField(max_length=64, blank=True, db_index=True)
@@ -12,6 +14,8 @@ class Employee(TimeStampedModel):
     department = models.CharField(max_length=20, choices=Department.choices, default=Department.RESTAURANT)
     can_work_restaurant = models.BooleanField(default=True)
     can_work_bar = models.BooleanField(default=False)
+    can_work_kitchen = models.BooleanField(default=False)
+    can_work_washup = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     notes = models.TextField(blank=True)
 

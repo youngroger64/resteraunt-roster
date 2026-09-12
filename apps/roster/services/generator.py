@@ -10,6 +10,7 @@ from apps.roster.models import (
     RosterPurpose,
     RosterWeek,
     Shift,
+    UnresolvedShift,
     StaffingPattern,
     CoveragePattern,
     DailyStaffingPattern,
@@ -51,9 +52,15 @@ def parse_signature(text):
 
 
 def compatible(employee, department):
+    if department == Department.RESTAURANT:
+        return employee.can_work_restaurant
     if department == Department.BAR:
         return employee.can_work_bar
-    return employee.can_work_restaurant
+    if department == Department.KITCHEN:
+        return employee.can_work_kitchen
+    if department == Department.WASHUP:
+        return employee.can_work_washup
+    return False
 
 
 def _interval(shift_date, start, end):
@@ -1628,18 +1635,27 @@ def generate_business_roster(target: RosterWeek, uncertain_threshold=75):
     target.open_shifts.all().delete()
 
     patterns = list(
-        EmployeePattern.objects.select_related("employee", "employee__schedule_profile")
+        EmployeePattern.objects
+        .select_related("employee", "employee__schedule_profile")
+        .filter(employee__is_active=True)
+    )
+
+    tracked_departments = (
+        Department.RESTAURANT,
+        Department.BAR,
+        Department.KITCHEN,
+        Department.WASHUP,
     )
 
     current_hours = {
         (pattern.employee_id, department): 0.0
         for pattern in patterns
-        for department in (Department.RESTAURANT, Department.BAR)
+        for department in tracked_departments
     }
     current_days = {
         (pattern.employee_id, department): 0
         for pattern in patterns
-        for department in (Department.RESTAURANT, Department.BAR)
+        for department in tracked_departments
     }
 
     created = 0
@@ -2028,4 +2044,29 @@ def copy_roster(source: RosterWeek, target: RosterWeek) -> int:
         )
 
     Shift.objects.bulk_create(copied_shifts)
+
+    # Copy untimed area assignments too.
+    # Example: Blaithnaid marked KITCHEN without exact hours.
+    # The target may already contain unresolved assignments if
+    # Set as default is run again. Replace them with the source state
+    # rather than creating duplicates.
+    target.unresolved_shifts.all().delete()
+
+    copied_unresolved = []
+
+    for old_issue in source.unresolved_shifts.select_related("employee"):
+        copied_unresolved.append(
+            UnresolvedShift(
+                roster_week=target,
+                employee=old_issue.employee,
+                date=old_issue.date + day_delta,
+                department=old_issue.department,
+                suggested_start_time=old_issue.suggested_start_time,
+                suggested_end_time=old_issue.suggested_end_time,
+                reason=old_issue.reason,
+            )
+        )
+
+    UnresolvedShift.objects.bulk_create(copied_unresolved)
+
     return len(copied_shifts)

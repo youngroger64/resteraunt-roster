@@ -17,6 +17,7 @@ from .models import (
     ShiftResponse,
     ShiftResponseStatus,
     StaffRosterNotice,
+    UnresolvedShift,
 )
 from .services.generator import candidate_availability
 
@@ -118,6 +119,17 @@ def staff_portal(request):
         .order_by("date", "start_time")
     )
 
+    area_only_shifts = list(
+        UnresolvedShift.objects.filter(
+            employee=employee,
+            roster_week__status=RosterStatus.PUBLISHED,
+            date__gte=today,
+            date__lte=horizon,
+        )
+        .select_related("roster_week")
+        .order_by("date")
+    )
+
     response_by_shift = {
         response.shift_id: response
         for response in ShiftResponse.objects.filter(
@@ -176,6 +188,7 @@ def staff_portal(request):
             "test_clock_state": test_clock_state,
             "clock_actions": clock_actions,
             "shift_rows": shift_rows,
+            "area_only_shifts": area_only_shifts,
             "open_shift_rows": open_shifts,
             "availability_exceptions": exceptions,
             "today": today,

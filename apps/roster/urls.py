@@ -14,6 +14,7 @@ urlpatterns = [
     path("patterns/<int:employee_id>/save/", views.save_schedule_profile, name="save_schedule_profile"),
     path("generate-from-patterns/", views.generate_pattern_roster, name="generate_patterns"),
     path("<int:pk>/", views.roster_detail, name="detail"),
+    path("<int:pk>/live-status/", views.roster_live_status, name="live_status"),
     path("<int:pk>/set-default/", views.set_default_roster, name="set_default"),
     path("<int:pk>/shift/add/", views.add_shift, name="add_shift"),
     path("<int:pk>/shift/<int:shift_id>/edit/", views.edit_shift, name="edit_shift"),

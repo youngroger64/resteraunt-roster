@@ -1,3 +1,4 @@
+import hashlib
 from datetime import date, timedelta
 from io import BytesIO
 from django.contrib import messages
@@ -5,8 +6,9 @@ import xlsxwriter
 from openpyxl import load_workbook
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
+from django.core.exceptions import ValidationError
 from django.db.models import Case, IntegerField, Value, When
-from django.http import HttpResponse, HttpResponseBadRequest
+from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.utils import timezone
 from django.shortcuts import get_object_or_404, redirect, render
 from apps.employees.models import Department, Employee
@@ -27,9 +29,11 @@ from .models import (
     EmployeeScheduleProfile,
     OpenShiftRequest,
     OpenShiftRequestStatus,
+    UnresolvedShift,
 )
 from .services.generator import (
     candidate_availability,
+    compatible,
     copy_roster,
     generate_business_roster,
     parse_signature,
@@ -163,11 +167,9 @@ def roster_create(request):
         elif start_mode == "previous":
             previous = (
                 RosterWeek.objects
-                .filter(
-                    purpose=RosterPurpose.WEEKLY,
-                    week_start__lt=week_start,
-                )
-                .order_by("-week_start")
+                .filter(week_start__lt=week_start)
+                .exclude(purpose=RosterPurpose.BASE)
+                .order_by("-week_start", "-updated_at")
                 .first()
             )
 
@@ -372,7 +374,13 @@ def save_schedule_profile(request, employee_id):
         messages.error(request, "Target hours and days must be numbers.")
         return redirect("roster:patterns")
     preferred_department = request.POST.get("preferred_department", "")
-    if preferred_department not in {"", Department.RESTAURANT, Department.BAR}:
+    if preferred_department not in {
+        "",
+        Department.RESTAURANT,
+        Department.BAR,
+        Department.KITCHEN,
+        Department.WASHUP,
+    }:
         return HttpResponseBadRequest("Invalid department")
     EmployeeScheduleProfile.objects.update_or_create(
         employee=employee,
@@ -564,6 +572,13 @@ def roster_detail(request, pk):
     employee_hours = {}
     scheduled_employee_ids = set()
 
+    unresolved_employee_ids = set(
+        roster.unresolved_shifts.values_list(
+            "employee_id",
+            flat=True,
+        )
+    )
+
     for shift in shifts:
         shift_map.setdefault((shift.employee_id, shift.date), []).append(shift)
         employee_hours[shift.employee_id] = (
@@ -573,18 +588,42 @@ def roster_detail(request, pk):
 
     show_all = request.GET.get("show") == "all"
 
-    employees = Employee.objects.filter(is_active=True)
-    if not show_all:
-        employees = employees.filter(pk__in=scheduled_employee_ids)
+    visible_employee_ids = (
+        scheduled_employee_ids
+        | unresolved_employee_ids
+    )
+
+    if show_all:
+        # Show all currently active staff plus anyone already
+        # scheduled on this roster, even if their employee
+        # record has since been marked inactive.
+        active_ids = set(
+            Employee.objects.filter(is_active=True)
+            .values_list("pk", flat=True)
+        )
+        employees = Employee.objects.filter(
+            pk__in=(active_ids | visible_employee_ids)
+        )
+    else:
+        # A scheduled employee must always appear on the roster.
+        employees = Employee.objects.filter(
+            pk__in=visible_employee_ids
+        )
 
     employees = employees.annotate(
         area_order=Case(
             When(department=Department.RESTAURANT, then=Value(0)),
             When(department=Department.BAR, then=Value(1)),
-            default=Value(2),
+            When(department=Department.KITCHEN, then=Value(2)),
+            When(department=Department.WASHUP, then=Value(3)),
+            default=Value(4),
             output_field=IntegerField(),
         )
-    ).order_by("area_order", "first_name", "last_name")
+    ).order_by(
+        "area_order",
+        "first_name",
+        "last_name",
+    )
 
     patterns = list(
         EmployeePattern.objects.select_related("employee")
@@ -609,6 +648,8 @@ def roster_detail(request, pk):
     open_choice_groups = {
         Department.RESTAURANT: [],
         Department.BAR: [],
+        Department.KITCHEN: [],
+        Department.WASHUP: [],
     }
 
     for open_shift in roster.open_shifts.all():
@@ -669,10 +710,33 @@ def roster_detail(request, pk):
                 [],
             ),
         },
+        {
+            "department": Department.KITCHEN,
+            "label": "Kitchen",
+            "items": open_choice_groups.get(
+                Department.KITCHEN,
+                [],
+            ),
+        },
+        {
+            "department": Department.WASHUP,
+            "label": "Wash up",
+            "items": open_choice_groups.get(
+                Department.WASHUP,
+                [],
+            ),
+        },
     ]
-    unresolved = request.session.get(f"unresolved_{roster.pk}", [])
+    # Persistent incomplete assignments, e.g. manager wrote "Kitchen"
+    # but did not provide actual start/end times.
+    unresolved = list(
+        roster.unresolved_shifts
+        .select_related("employee")
+        .order_by("date", "employee__first_name", "employee__last_name")
+    )
+
     unresolved_map = {
-        (int(item["employee_id"]), item["date"]): item
+        (item.employee_id, item.date): item
         for item in unresolved
     }
 
@@ -685,7 +749,7 @@ def roster_detail(request, pk):
                     "day": day,
                     "shifts": shift_map.get((employee.id, day), []),
                     "issue": unresolved_map.get(
-                        (employee.id, day.isoformat())
+                        (employee.id, day)
                     ),
                 }
             )
@@ -822,16 +886,7 @@ def roster_detail(request, pk):
             "date",
             "start_time",
         ):
-            if (
-                open_shift.department == Department.BAR
-                and not employee.can_work_bar
-            ):
-                continue
-
-            if (
-                open_shift.department == Department.RESTAURANT
-                and not employee.can_work_restaurant
-            ):
+            if not compatible(employee, open_shift.department):
                 continue
 
             signature = (
@@ -993,6 +1048,8 @@ def roster_detail(request, pk):
             "shift_change_requests": shift_change_requests,
             "replacement_hour_requests": replacement_hour_requests,
             "open_shift_requests": open_shift_requests,
+            "previous_week": roster.week_start - timedelta(days=7),
+            "next_week": roster.week_start + timedelta(days=7),
         },
     )
 
@@ -1468,31 +1525,161 @@ def roster_excel_import(request, pk):
     )
     return redirect("roster:detail", pk=pk)
 @login_required
+@transaction.atomic
 def save_cell(request, pk):
     if request.method != "POST":
         return HttpResponseBadRequest("POST required")
+
     roster = get_object_or_404(RosterWeek, pk=pk)
-    employee = get_object_or_404(Employee, pk=request.POST["employee_id"])
-    date = request.POST["date"]
-    text = request.POST.get("shift_text","").strip()
-    Shift.objects.filter(roster_week=roster, employee=employee, date=date).delete()
-    if text and text.lower() not in {"off","-","none"}:
+    employee = get_object_or_404(
+        Employee,
+        pk=request.POST["employee_id"],
+    )
+
+    try:
+        shift_date = date.fromisoformat(request.POST["date"])
+    except (ValueError, TypeError):
+        message = "Invalid roster date."
+
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse(
+                {"ok": False, "error": message},
+                status=400,
+            )
+
+        messages.error(request, message)
+        return redirect("roster:detail", pk=pk)
+
+    shift_text = request.POST.get("shift_text", "").strip()
+    normalized = shift_text.lower().replace(" ", "")
+
+    area_map = {
+        "restaurant": Department.RESTAURANT,
+        "bar": Department.BAR,
+        "kitchen": Department.KITCHEN,
+        "washup": Department.WASHUP,
+        "wash-up": Department.WASHUP,
+    }
+
+    requested_department = area_map.get(normalized)
+
+    department = (
+        request.POST.get("department")
+        or employee.department
+    )
+
+    is_off = (
+        not shift_text
+        or normalized in {"off", "-", "none"}
+    )
+
+    # --------------------------------------------------------
+    # AREA-ONLY ASSIGNMENT
+    # e.g. manager types KITCHEN without exact hours.
+    # --------------------------------------------------------
+    if requested_department:
+        Shift.objects.filter(
+            roster_week=roster,
+            employee=employee,
+            date=shift_date,
+        ).delete()
+
+        UnresolvedShift.objects.update_or_create(
+            roster_week=roster,
+            employee=employee,
+            date=shift_date,
+            department=requested_department,
+            defaults={
+                "suggested_start_time": None,
+                "suggested_end_time": None,
+                "reason": "",
+            },
+        )
+
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse(
+                {
+                    "ok": True,
+                    "off": False,
+                    "area_only": True,
+                    "department_label": requested_department.replace("_", " ").upper(),
+                    "display": [],
+                }
+            )
+
+        return redirect("roster:detail", pk=pk)
+
+    # --------------------------------------------------------
+    # NORMAL TIMED SHIFT / OFF
+    # --------------------------------------------------------
+    parsed = []
+
+    if not is_off:
         try:
-            for segment, start, end in parse_signature(text):
-                Shift.objects.create(
-                    roster_week=roster, employee=employee,
-                    department=request.POST.get("department") or employee.department,
-                    date=date, start_time=start, end_time=end, segment=segment,
-                    source="manual", confidence=100,
-                )
+            parsed = list(parse_signature(shift_text))
         except Exception:
-            messages.error(request, "Choose: enter 09:00-17:00, enter a split shift, or type OFF.")
+            message = (
+                "Enter 09:00-17:00, a split shift, "
+                "OFF, or an area such as KITCHEN."
+            )
+
+            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                return JsonResponse(
+                    {"ok": False, "error": message},
+                    status=400,
+                )
+
+            messages.error(request, message)
             return redirect("roster:detail", pk=pk)
-    key = f"unresolved_{roster.pk}"
-    request.session[key] = [
-        i for i in request.session.get(key, [])
-        if not (int(i["employee_id"]) == employee.id and i["date"] == date)
-    ]
+
+    Shift.objects.filter(
+        roster_week=roster,
+        employee=employee,
+        date=shift_date,
+    ).delete()
+
+    created = []
+
+    if is_off:
+        UnresolvedShift.objects.filter(
+            roster_week=roster,
+            employee=employee,
+            date=shift_date,
+        ).delete()
+    else:
+        for segment, start_time, end_time in parsed:
+            shift = Shift.objects.create(
+                roster_week=roster,
+                employee=employee,
+                department=department,
+                date=shift_date,
+                start_time=start_time,
+                end_time=end_time,
+                segment=segment,
+                source="manual",
+                confidence=100,
+            )
+            created.append(shift)
+
+        UnresolvedShift.objects.filter(
+            roster_week=roster,
+            employee=employee,
+            date=shift_date,
+        ).delete()
+
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return JsonResponse(
+            {
+                "ok": True,
+                "off": is_off,
+                "area_only": False,
+                "display": [
+                    shift.display_time
+                    for shift in created
+                ],
+            }
+        )
+
     return redirect("roster:detail", pk=pk)
 
 @login_required
@@ -1516,18 +1703,34 @@ def use_suggestion(request, pk):
 
 @login_required
 def roster_publish(request, pk):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+
     roster = get_object_or_404(RosterWeek, pk=pk)
-    publish_roster(roster, request.user)
+
+    try:
+        publish_roster(roster, request.user)
+    except ValidationError as exc:
+        message = (
+            exc.messages[0]
+            if getattr(exc, "messages", None)
+            else str(exc)
+        )
+        messages.error(request, message)
+        return redirect("roster:detail", pk=pk)
+
+    messages.success(request, "Roster published.")
     return redirect("roster:detail", pk=pk)
 
 
 
 def _employee_can_take_open_shift(roster, open_shift, employee):
-    if open_shift.department == Department.BAR:
-        if not employee.can_work_bar:
-            return False, "This employee cannot work Bar."
-    elif not employee.can_work_restaurant:
-        return False, "This employee cannot work Restaurant."
+    if not compatible(employee, open_shift.department):
+        return (
+            False,
+            f"This employee cannot work "
+            f"{open_shift.get_department_display()}.",
+        )
 
     availability = candidate_availability(
         roster=roster,
@@ -2387,5 +2590,52 @@ def add_shift(request, pk):
                 (Department.BAR, "Bar"),
             ],
         },
+    )
+
+@login_required
+def roster_live_status(request, pk):
+    """
+    Lightweight manager-page polling endpoint.
+
+    Returns a stable fingerprint of staff-request state so the
+    roster page can refresh itself when an employee submits or
+    changes a shift response.
+    """
+    roster = get_object_or_404(RosterWeek, pk=pk)
+
+    responses = (
+        ShiftResponse.objects
+        .filter(shift__roster_week=roster)
+        .order_by("pk")
+        .values_list(
+            "pk",
+            "status",
+            "wants_replacement_shift",
+            "updated_at",
+        )
+    )
+
+    pieces = [
+        f"{pk}:{status}:{int(wants_hours)}:{updated_at.isoformat()}"
+        for pk, status, wants_hours, updated_at in responses
+    ]
+
+    fingerprint = hashlib.sha256(
+        "|".join(pieces).encode("utf-8")
+    ).hexdigest()
+
+    return JsonResponse(
+        {
+            "fingerprint": fingerprint,
+            "cannot_work": ShiftResponse.objects.filter(
+                shift__roster_week=roster,
+                status=ShiftResponseStatus.CANNOT_WORK,
+            ).count(),
+            "replacement_hours": ShiftResponse.objects.filter(
+                shift__roster_week=roster,
+                status=ShiftResponseStatus.RESOLVED,
+                wants_replacement_shift=True,
+            ).count(),
+        }
     )
 

@@ -1,214 +1,47 @@
 {% extends "base.html" %}
 {% block content %}
 
+<div class="week-nav-row">
+  <a
+    class="btn week-nav-btn"
+    href="/?week={{ previous_week|date:'Y-m-d' }}"
+  >
+    ← Previous week
+  </a>
 
-<div class="card" style="margin-bottom:20px;">
-  <h2>Quick edits</h2>
-  <p class="muted">
-    Change a person or shift time without rebuilding the roster.
-  </p>
-
-  <details>
-    <summary style="cursor:pointer;">
-      Edit a shift
-    </summary>
-
-    <div style="margin-top:14px;">
-      {% for shift in roster.shifts.all %}
-        <div style="
-          display:flex;
-          justify-content:space-between;
-          align-items:center;
-          gap:14px;
-          padding:10px 0;
-          border-top:1px solid #ddd;
-        ">
-          <div>
-            <strong>{{ shift.employee.full_name }}</strong><br>
-            <span class="muted">
-              {{ shift.date|date:"D j M" }}
-              ·
-              {{ shift.start_time|time:"H:i" }}–{{ shift.end_time|time:"H:i" }}
-            </span>
-          </div>
-
-          <a
-            class="btn"
-            href="{% url 'roster:edit_shift' roster.pk shift.pk %}"
-          >
-            Edit
-          </a>
-        </div>
-      {% endfor %}
+  <div class="week-nav-center">
+    <div class="muted week-nav-label">
+      WEEK BEGINNING
     </div>
-  </details>
-  <div style="margin-top: 12px;">
-    <a class="btn" href="{% url 'roster:add_shift' roster.pk %}">
-      + Add shift
-    </a>
+
+    <h1 class="week-nav-date">
+      {{ roster.week_start|date:"j F Y" }}
+    </h1>
   </div>
 
+  <a
+    class="btn week-nav-btn"
+    href="/?week={{ next_week|date:'Y-m-d' }}"
+  >
+    Next week →
+  </a>
 </div>
 
 
 
 {% if copied_issues %}
-<div class="card" style="margin-bottom:20px;">
-  <h2>{{ copied_issues|length }} shift{{ copied_issues|length|pluralize }} need attention</h2>
 
-  <p class="muted">
-    Everything else has been kept from the previous roster.
-  </p>
-
-  {% for issue in copied_issues %}
-    <div style="
-      padding:14px 0;
-      border-top:1px solid #ddd;
-    ">
-      <strong>
-        {{ issue.employee }} —
-        {{ issue.date }}
-      </strong>
-
-      <div>
-        {{ issue.start }}–{{ issue.end }}
-      </div>
-
-      <div class="muted">
-        {{ issue.reason }}
-      </div>
-
-      {% if issue.suggestions %}
-        <div style="margin-top:14px;">
-          <div class="muted">Best replacement</div>
-
-          {% with best=issue.suggestions.0 %}
-            <strong>{{ best.employee }}</strong>
-
-            {% if best.reasons %}
-              <div class="muted" style="margin-top:4px;">
-                {{ best.reasons|join:", " }}
-              </div>
-            {% endif %}
-
-            <form
-              method="post"
-              action="{% url 'roster:use_replacement' roster.pk issue.shift_id %}"
-              style="margin-top:10px;"
-            >
-              {% csrf_token %}
-              <input
-                type="hidden"
-                name="employee_id"
-                value="{{ best.employee_id }}"
-              >
-              <button class="btn primary" type="submit">
-                Use {{ best.employee }}
-              </button>
-            </form>
-          {% endwith %}
-
-          {% if issue.suggestions|length > 1 %}
-            <details style="margin-top:12px;">
-              <summary style="cursor:pointer;">
-                Other options
-              </summary>
-
-              <div style="margin-top:10px;">
-                {% for option in issue.suggestions|slice:"1:" %}
-                  <form
-                    method="post"
-                    action="{% url 'roster:use_replacement' roster.pk issue.shift_id %}"
-                    style="margin:8px 0;"
-                  >
-                    {% csrf_token %}
-
-                    <input
-                      type="hidden"
-                      name="employee_id"
-                      value="{{ option.employee_id }}"
-                    >
-
-                    <button class="btn" type="submit">
-                      {{ option.employee }}
-                    </button>
-                  </form>
-                {% endfor %}
-              </div>
-            </details>
-          {% endif %}
-        </div>
-
-      {% else %}
-
-        <div style="margin-top:12px;">
-          <strong>No simple replacement found.</strong>
-        </div>
-
-      {% endif %}
-    </div>
-  {% endfor %}
-</div>
 {% endif %}
 
 
-<div class="page-header print-hide compact-header simplified-roster-header">
-  <div>
-    <h1>{{ roster }}</h1>
-    <p class="muted">
-      {{ scheduled_employee_count }} staff scheduled · {{ roster.get_status_display }}
-      {% if roster.is_default %} · <strong>DEFAULT</strong>{% endif %}
-    </p>
-  </div>
-  <div class="actions primary-roster-actions">
-    {% if roster.status == "draft" and roster.purpose == "weekly" %}
-      <form method="post" action="{% url 'roster:publish' roster.pk %}">
-        {% csrf_token %}
-        <button class="btn primary">Publish roster</button>
-      </form>
-    {% endif %}
-    <details class="manager-more"><summary class="btn">More</summary><div class="manager-more-menu">
-      {% if show_all %}<a href="{% url 'roster:detail' roster.pk %}">Working only</a>{% else %}<a href="?show=all">Add / show employees</a>{% endif %}
-      <button type="button" onclick="window.print()">Print</button>
-      <a href="{% url 'roster:excel' roster.pk %}">Excel</a>
 
-      {% if roster.purpose == "weekly" %}
-        {% if roster.is_default %}
-          <span class="default-menu-label">✓ Default roster</span>
-        {% else %}
-          <form method="post"
-                action="{% url 'roster:set_default' roster.pk %}"
-                onsubmit="return confirm('Use this roster as the default for future weeks?')">
-            {% csrf_token %}
-            <button type="submit">Set as default</button>
-          </form>
-        {% endif %}
-      {% endif %}
-      {% if roster.status == "draft" and roster.purpose == "weekly" %}
-        <form method="post"
-              action="{% url 'roster:regenerate' roster.pk %}"
-              onsubmit="return confirm('Start this draft again? Your current draft shifts will be replaced.')">
-          {% csrf_token %}
-          <button type="submit">Regenerate draft</button>
-        </form>
-      {% endif %}
-      <a href="{% url 'roster:delete' roster.pk %}" class="danger-link">Delete roster</a>
-    </div></details>
-  </div>
-</div>
 
-{% if unresolved_count %}
-<div class="alert warning print-hide">
-  <strong>{{ unresolved_count }} uncertain cells.</strong>
-  Choose Use, enter another shift, or type OFF.
-</div>
-{% endif %}
 
 
 
 {% if shift_change_requests or open_shift_requests %}
 <section class="card manager-attention print-hide">
-  <h2>Staff requests</h2>
+  <h2 class="manager-section-title">Staff requests</h2>
   <p class="muted">Published shifts stay assigned until you approve a change.</p>
 
   {% for item in shift_change_requests %}
@@ -387,42 +220,28 @@
 </section>
 {% endif %}
 
-{% if open_shift_groups %}
-<section class="card open-shifts-card print-hide">
-  <h2>Needs attention</h2>
-  <p class="muted">Only shifts the system could not safely assign appear here.</p>
-  {% for group in open_shift_groups %}
-    {% if group.items %}
-    <div class="choice-department">
-      <h3>{{ group.label }}</h3>
-      {% for item in group.items %}
-      <article class="open-choice">
-        <header class="open-choice-header"><div><strong>{{ item.shift.date|date:"D d M" }}</strong><span>{{ item.shift.source_signature }}</span></div></header>
-        {% if item.choices %}
-        <div class="ranked-candidates">
-          {% for choice in item.choices %}
-          <div class="candidate-card">
-            <div class="candidate-rank">{{ forloop.counter }}</div>
-            <div class="candidate-copy"><strong>{{ choice.name }}</strong>{% if choice.reasons %}<ul class="candidate-reasons">{% for reason in choice.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}</div>
-            <form method="post" action="{% url 'roster:assign_suggested_employee' roster.pk item.shift.pk choice.employee_id %}">{% csrf_token %}<button class="btn {% if forloop.first %}primary{% endif %}">Use</button></form>
-          </div>
-          {% endfor %}
-        </div>
-        {% else %}<div class="alert warning">No safe eligible employee is currently available. This one needs a manager decision.</div>{% endif %}
-        {% if item.other_available %}
-        <details class="other-employees"><summary>Other available employees ({{ item.other_available|length }})</summary>
-          <form method="post" action="{% url 'roster:assign_open_shift' roster.pk item.shift.pk %}">{% csrf_token %}<select name="employee_id" required><option value="">Choose employee</option>{% for employee in item.other_available %}<option value="{{ employee.pk }}">{{ employee.full_name }}</option>{% endfor %}</select><button class="btn">Assign</button></form>
-        </details>
-        {% endif %}
-      </article>
-      {% endfor %}
-    </div>
-    {% endif %}
-  {% endfor %}
-</section>
-{% endif %}
+
 
 {% if rows %}
+
+<div class="roster-employee-toggle print-hide">
+  {% if show_all %}
+    <a class="btn roster-show-employees" href="?">
+      Show scheduled only <strong>−</strong>
+    </a>
+  {% else %}
+    <a class="btn roster-show-employees" href="?show=all">
+      Show all employees <strong>+</strong>
+    </a>
+  {% endif %}
+</div>
+
+<div class="roster-editing-hint print-hide">
+  <strong>Editing times:</strong>
+  Use 24-hour time where possible, or AM/PM.
+  Examples: <code>8am - 9pm</code> or <code>8pm - 00:30</code>.
+</div>
+
 <div class="roster-grid-wrap compact-roster">
 <table class="roster-grid">
 <thead>
@@ -450,17 +269,8 @@
   <td class="shift-cell {% if cell.issue %}uncertain-cell{% endif %}">
     {% if roster.status == "draft" %}
       {% if cell.issue %}
-      <div class="cell-choice">
-        <small>{{ cell.issue.suggestion }} · {{ cell.issue.confidence }}%</small>
-        <form method="post"
-              action="{% url 'roster:use_suggestion' roster.pk %}">
-          {% csrf_token %}
-          <input type="hidden" name="employee_id" value="{{ row.employee.pk }}">
-          <input type="hidden" name="date" value="{{ cell.day|date:'Y-m-d' }}">
-          <input type="hidden" name="suggestion" value="{{ cell.issue.suggestion }}">
-          <input type="hidden" name="confidence" value="{{ cell.issue.confidence }}">
-          <button class="mini-btn">Use</button>
-        </form>
+      <div class="cell-choice unresolved-shift-warning">
+        <strong>{{ cell.issue.get_department_display|upper }}</strong>
       </div>
       {% endif %}
 
@@ -479,7 +289,7 @@
 
         <input type="hidden"
                name="department"
-               value="{{ row.employee.department }}">
+               value="{% if cell.shifts %}{{ cell.shifts.0.department }}{% elif cell.issue %}{{ cell.issue.department }}{% else %}{{ row.employee.department }}{% endif %}">
 
         <button type="button"
                 class="cell-view">
@@ -527,6 +337,22 @@
 </tbody>
 </table>
 </div>
+
+{% if roster.status == "draft" %}
+<div class="roster-send-area print-hide">
+  <form method="post" action="{% url 'roster:publish' roster.pk %}">
+    {% csrf_token %}
+    <button type="submit" class="btn primary roster-send-button">
+      Send Roster to Employees
+    </button>
+  </form>
+</div>
+{% else %}
+<div class="roster-sent-status print-hide">
+  ✓ Roster sent to employees
+</div>
+{% endif %}
+
 {% else %}
 <div class="card empty-state">
   <h2>No employees are scheduled</h2>
@@ -540,73 +366,481 @@
 </div>
 {% endif %}
 
-<p class="muted print-hide roster-help">
-  Enter <code>09:00-17:00</code>, a split shift separated by a comma,
-  or <code>OFF</code>.
-</p>
+
 
 <script>
 document.addEventListener("DOMContentLoaded", function () {
-  document.querySelectorAll(".auto-cell-form").forEach(function (form) {
+
+  let activeForm = null;
+
+  function normaliseTime(value, isEnd=false) {
+    let v = value.trim().toLowerCase().replace(/\s+/g, "");
+
+    if (!v) return "";
+
+    let pm = v.endsWith("pm");
+    let am = v.endsWith("am");
+
+    v = v.replace(/am|pm/g, "").replace(".", ":");
+
+    let h, m = 0;
+
+    if (v.includes(":")) {
+      const bits = v.split(":");
+      h = parseInt(bits[0], 10);
+      m = parseInt(bits[1] || "0", 10);
+    } else if (/^\d{3,4}$/.test(v)) {
+      h = parseInt(v.slice(0, -2), 10);
+      m = parseInt(v.slice(-2), 10);
+    } else {
+      h = parseInt(v, 10);
+    }
+
+    if (Number.isNaN(h) || Number.isNaN(m) || m > 59) return null;
+
+    if (pm && h < 12) h += 12;
+    if (am && h === 12) h = 0;
+
+    /*
+      Manager shorthand:
+      an end time such as "4" normally means 16:00.
+      Explicit 4am remains 04:00.
+    */
+    if (isEnd && !am && !pm && h >= 1 && h <= 7) {
+      h += 12;
+    }
+
+    if (h > 23) return null;
+
+    return String(h).padStart(2, "0") + ":" +
+           String(m).padStart(2, "0");
+  }
+
+
+  function makeShiftRow(start="", end="") {
+    const row = document.createElement("div");
+    row.className = "shift-editor-row";
+
+    row.innerHTML = `
+      <label>
+        <span>Start</span>
+        <input type="text"
+               class="shift-start"
+               value="${start}"
+               placeholder="08:00"
+               autocomplete="off">
+      </label>
+
+      <label>
+        <span>End</span>
+        <input type="text"
+               class="shift-end"
+               value="${end}"
+               placeholder="16:00"
+               autocomplete="off">
+      </label>
+
+      <button type="button"
+              class="remove-shift-row"
+              title="Remove this shift">×</button>
+    `;
+
+    const startInput = row.querySelector(".shift-start");
+    const endInput = row.querySelector(".shift-end");
+
+    function formatFriendlyTime(input, isEnd) {
+      const raw = input.value.trim();
+      if (!raw) return;
+
+      const formatted = normaliseTime(raw, isEnd);
+
+      if (formatted) {
+        input.value = formatted;
+      }
+    }
+
+    startInput.addEventListener("blur", function () {
+      formatFriendlyTime(startInput, false);
+    });
+
+    endInput.addEventListener("blur", function () {
+      formatFriendlyTime(endInput, true);
+    });
+
+    startInput.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        formatFriendlyTime(startInput, false);
+        endInput.focus();
+        endInput.select();
+      }
+    });
+
+    endInput.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        formatFriendlyTime(endInput, true);
+      }
+    });
+
+    row.querySelector(".remove-shift-row").addEventListener("click", function () {
+      row.remove();
+    });
+
+    return row;
+  }
+
+
+  function parseExisting(text) {
+    if (!text || text.toUpperCase() === "OFF") return [];
+
+    return text.split(",").map(function(part) {
+      const bits = part.trim().split("-");
+      if (bits.length < 2) return null;
+
+      return {
+        start: bits[0].trim(),
+        end: bits.slice(1).join("-").trim()
+      };
+    }).filter(Boolean);
+  }
+
+
+  function closeEditor(form) {
     const view = form.querySelector(".cell-view");
     const editor = form.querySelector(".cell-inline-editor");
-    const input = form.querySelector(".cell-input");
 
-    let original = input.value.trim();
-    let submitting = false;
+    editor.hidden = true;
+    view.hidden = false;
+
+    if (activeForm === form) activeForm = null;
+  }
+
+
+  document.querySelectorAll(".auto-cell-form").forEach(function (form) {
+
+    const view = form.querySelector(".cell-view");
+    const oldInput = form.querySelector(".cell-input");
+    const editor = form.querySelector(".cell-inline-editor");
+
+    if (!view || !oldInput || !editor) return;
+
+    const originalText = oldInput.value.trim();
+
+    /*
+      Keep shift_text as a hidden field because the existing Django
+      save_cell endpoint already understands this format.
+    */
+    oldInput.type = "hidden";
+
+    /*
+      Move the real shift_text field outside the editor before
+      replacing the editor HTML. Otherwise editor.innerHTML removes it
+      from the form and Django receives an empty shift_text.
+    */
+    form.appendChild(oldInput);
+
+    editor.innerHTML = `
+      <div class="shift-editor-title">Edit shift</div>
+
+      <div class="shift-editor-rows"></div>
+
+      <button type="button" class="add-shift-row">
+        + Add another shift
+      </button>
+
+      
+
+<div class="shift-editor-actions">
+        <button type="button" class="btn clear-shift-day">
+          Clear shift
+        </button>
+
+        <span class="shift-editor-spacer"></span>
+
+        <button type="button" class="btn cancel-shift-edit">
+          Cancel
+        </button>
+
+        <button type="button" class="btn primary save-shift-edit">
+          Save
+        </button>
+      </div>
+
+      <div class="shift-editor-error" hidden></div>
+    `;
+
+    const rows = editor.querySelector(".shift-editor-rows");
+    const addButton = editor.querySelector(".add-shift-row");
+    const saveButton = editor.querySelector(".save-shift-edit");
+    const cancelButton = editor.querySelector(".cancel-shift-edit");
+    const clearButton = editor.querySelector(".clear-shift-day");
+    const errorBox = editor.querySelector(".shift-editor-error");
+
+
+    function loadRows() {
+      rows.innerHTML = "";
+
+      const existing = parseExisting(oldInput.value.trim());
+
+      if (existing.length) {
+        existing.forEach(function (shift) {
+          rows.appendChild(makeShiftRow(shift.start, shift.end));
+        });
+      } else {
+        rows.appendChild(makeShiftRow());
+      }
+    }
+
 
     function openEditor() {
+      if (activeForm && activeForm !== form) {
+        closeEditor(activeForm);
+      }
+
+      loadRows();
+
       view.hidden = true;
       editor.hidden = false;
-      input.focus();
-      input.select();
+      errorBox.hidden = true;
+      activeForm = form;
+
+      const first = editor.querySelector(".shift-start");
+      if (first) {
+        first.focus();
+        first.select();
+      }
     }
 
-    function cancelEdit() {
-      input.value = original;
-      editor.hidden = true;
-      view.hidden = false;
-    }
 
-    function saveIfChanged() {
-      if (submitting) return;
+    async function saveEditor() {
 
-      let current = input.value.trim();
+      const shiftRows = [...rows.querySelectorAll(".shift-editor-row")];
+      const parts = [];
 
-      if (!current) {
-        current = "OFF";
-        input.value = "OFF";
+      for (const row of shiftRows) {
+
+        const startInput = row.querySelector(".shift-start");
+        const endInput = row.querySelector(".shift-end");
+
+        const rawStart = startInput.value.trim();
+        const rawEnd = endInput.value.trim();
+
+        if (!rawStart && !rawEnd) continue;
+
+        if (!rawStart || !rawEnd) {
+          errorBox.textContent = "Enter both a start and finish time.";
+          errorBox.hidden = false;
+          return;
+        }
+
+        const start = normaliseTime(rawStart, false);
+        const end = normaliseTime(rawEnd, true);
+
+        if (!start || !end) {
+          errorBox.textContent =
+            "Check the times. You can use 8, 830, 08:30 or 4pm.";
+          errorBox.hidden = false;
+          return;
+        }
+
+        parts.push(start + "-" + end);
       }
 
-      if (current === original) {
-        editor.hidden = true;
-        view.hidden = false;
-        return;
-      }
+      oldInput.value = parts.length ? parts.join(", ") : "OFF";
 
-      submitting = true;
-      form.submit();
+      const formData = new FormData(form);
+
+      saveButton.disabled = true;
+      errorBox.hidden = true;
+
+      try {
+
+        const response = await fetch(form.action, {
+          method: "POST",
+          body: formData,
+          headers: {
+            "X-Requested-With": "XMLHttpRequest"
+          }
+        });
+
+        const responseText = await response.text();
+
+        let data;
+
+        try {
+          data = JSON.parse(responseText);
+        } catch (e) {
+          console.error("Roster save response:", responseText);
+
+          throw new Error(
+            "Save failed (" + response.status + "). Check server output."
+          );
+        }
+
+        if (!response.ok || !data.ok) {
+          console.error("Roster save error:", data);
+          throw new Error(data.error || "Could not save shift.");
+        }
+
+        view.innerHTML = "";
+
+        if (data.display && data.display.length) {
+          data.display.forEach(function (time) {
+            const span = document.createElement("span");
+            span.className = "cell-shift-line";
+            span.textContent = time;
+            view.appendChild(span);
+          });
+        } else {
+          const span = document.createElement("span");
+          span.className = "cell-off";
+          span.textContent = "OFF";
+          view.appendChild(span);
+        }
+
+        closeEditor(form);
+
+      } catch (error) {
+
+        errorBox.textContent = error.message;
+        errorBox.hidden = false;
+
+      } finally {
+
+        saveButton.disabled = false;
+      }
     }
+
 
     view.addEventListener("click", openEditor);
 
-    input.addEventListener("keydown", function (event) {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        saveIfChanged();
-      }
+    addButton.addEventListener("click", function () {
+      const row = makeShiftRow();
+      rows.appendChild(row);
 
-      if (event.key === "Escape") {
-        event.preventDefault();
-        cancelEdit();
-      }
+      const input = row.querySelector(".shift-start");
+      if (input) input.focus();
     });
 
-    input.addEventListener("blur", function () {
-      window.setTimeout(saveIfChanged, 100);
+    cancelButton.addEventListener("click", function () {
+      oldInput.value = originalText;
+      closeEditor(form);
     });
+
+    clearButton.addEventListener("click", function () {
+      rows.innerHTML = "";
+      rows.appendChild(makeShiftRow());
+      oldInput.value = "OFF";
+    });
+
+    saveButton.addEventListener("click", saveEditor);
+
   });
+
 });
+</script>
+
+
+
+<script id="roster-live-poll">
+(function () {
+  const statusUrl = "{% url 'roster:live_status' roster.pk %}";
+  let lastFingerprint = null;
+  let checking = false;
+
+  function managerIsEditing() {
+    const active = document.activeElement;
+
+    if (
+      active &&
+      (
+        active.tagName === "INPUT" ||
+        active.tagName === "SELECT" ||
+        active.tagName === "TEXTAREA"
+      )
+    ) {
+      return true;
+    }
+
+    // Our click-to-edit draft cells.
+    if (
+      document.querySelector(
+        ".cell-inline-editor:not([hidden])"
+      )
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
+  async function checkRosterStatus() {
+    if (checking) return;
+    checking = true;
+
+    try {
+      const response = await fetch(statusUrl, {
+        headers: {
+          "X-Requested-With": "XMLHttpRequest"
+        },
+        cache: "no-store"
+      });
+
+      if (!response.ok) return;
+
+      const data = await response.json();
+
+      // First check simply establishes the current state.
+      if (lastFingerprint === null) {
+        lastFingerprint = data.fingerprint;
+        return;
+      }
+
+      if (data.fingerprint !== lastFingerprint) {
+        if (managerIsEditing()) {
+          // Remember the changed state but wait until the
+          // manager has finished editing before reloading.
+          return;
+        }
+
+        window.location.reload();
+      }
+    } catch (error) {
+      // A temporary network problem should never interrupt
+      // the manager's work.
+      console.debug("Roster live check unavailable.");
+    } finally {
+      checking = false;
+    }
+  }
+
+  checkRosterStatus();
+  window.setInterval(checkRosterStatus, 10000);
+})();
+</script>
+
+
+<script id="roster-scroll-position">
+(function () {
+  const key = "roster-scroll-" + window.location.pathname;
+
+  window.addEventListener("beforeunload", function () {
+    sessionStorage.setItem(
+      key,
+      String(window.scrollY)
+    );
+  });
+
+  window.addEventListener("DOMContentLoaded", function () {
+    const saved = sessionStorage.getItem(key);
+
+    if (saved !== null) {
+      window.scrollTo(0, parseInt(saved, 10) || 0);
+      sessionStorage.removeItem(key);
+    }
+  });
+})();
 </script>
 
 {% endblock %}

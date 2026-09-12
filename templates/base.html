@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{% block title %}Restaurant Roster{% endblock %}</title>
   <link rel="stylesheet" href="{% static 'css/app.css' %}">
+    <link rel="stylesheet" href="{% static 'css/manager-roster.css' %}">
 </head>
 <body>
 <div class="layout">
@@ -15,12 +16,9 @@
       <span>Restaurant Roster</span>
     </a>
     <nav>
-      <a href="{% url 'dashboard:index' %}">Dashboard</a>
-      <a href="{% url 'roster:list' %}">Rosters</a>
+      <a href="{% url 'dashboard:index' %}">Manage Roster</a>
+      <a href="{% url 'roster:list' %}">Roster History</a>
       <a href="{% url 'employees:list' %}">Employees</a>
-      <a href="{% url 'imports:index' %}">Imports</a>
-      <a href="{% url 'roster:patterns' %}">Learning</a>
-      <a href="/admin/">Admin</a>
     </nav>
     <div class="sidebar-footer">
       {% if user.is_authenticated %}

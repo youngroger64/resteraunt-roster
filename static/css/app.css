@@ -428,3 +428,23 @@ code{background:#eef2f7;padding:2px 5px;border-radius:5px}
 .roster-start-choice small {
     opacity: .65;
 }
+
+.unresolved-shift-warning {
+  margin-bottom: 6px;
+}
+
+.unresolved-shift-warning strong {
+  display: block;
+}
+
+.unresolved-shift-warning small {
+  display: block;
+  margin-top: 2px;
+}
+
+.cell-area-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}

@@ -62,55 +62,97 @@
       <section class="staff-card">
         <div class="section-heading"><div><h2>My upcoming shifts</h2><p>Only tell the manager if something is wrong.</p></div></div>
         <div class="staff-shift-list">
+
         {% for row in shift_rows %}
           <article class="staff-shift simple-shift">
-            <div class="shift-date"><strong>{{ row.shift.date|date:"D" }}</strong><span>{{ row.shift.date|date:"d M" }}</span></div>
-            <div class="shift-main"><strong>{{ row.shift.start_time|time:"H:i" }}–{{ row.shift.end_time|time:"H:i" }}</strong><span>{{ row.shift.get_department_display }}</span>
-              {% if row.response.status == "cannot_work" %}<span class="response-badge problem">Manager notified</span>{% endif %}
+            <div class="shift-date">
+              <strong>{{ row.shift.date|date:"D" }}</strong>
+              <span>{{ row.shift.date|date:"d M" }}</span>
             </div>
+
+            <div class="shift-main">
+              <strong>
+                {{ row.shift.start_time|time:"H:i" }}–{{ row.shift.end_time|time:"H:i" }}
+              </strong>
+              <span>{{ row.shift.get_department_display }}</span>
+
+              {% if row.response.status == "cannot_work" %}
+                <span class="response-badge problem">
+                  Manager notified
+                </span>
+              {% endif %}
+            </div>
+
             <div class="shift-actions">
               {% if row.response.status != "cannot_work" %}
               <details class="cant-work-details">
-  <summary>I can't work this shift</summary>
+                <summary>I can't work this shift</summary>
 
-  <form method="post"
-        action="{% url 'roster:staff_shift_response' row.shift.pk %}">
-    {% csrf_token %}
-    <input type="hidden" name="action" value="cannot_work">
+                <form method="post"
+                      action="{% url 'roster:staff_shift_response' row.shift.pk %}">
+                  {% csrf_token %}
+                  <input type="hidden"
+                         name="action"
+                         value="cannot_work">
 
-    <p><strong>Would you like another shift instead?</strong></p>
+                  <p>
+                    <strong>Would you like another shift instead?</strong>
+                  </p>
 
-    <label class="staff-choice">
-      <input type="radio"
-             name="wants_replacement_shift"
-             value="yes"
-             required>
-      Yes, I'd like the hours
-    </label>
+                  <label class="staff-choice">
+                    <input type="radio"
+                           name="wants_replacement_shift"
+                           value="yes"
+                           required>
+                    Yes, I'd like the hours
+                  </label>
 
-    <label class="staff-choice">
-      <input type="radio"
-             name="wants_replacement_shift"
-             value="no"
-             required>
-      No, just tell the manager
-    </label>
+                  <label class="staff-choice">
+                    <input type="radio"
+                           name="wants_replacement_shift"
+                           value="no"
+                           required>
+                    No, just tell the manager
+                  </label>
 
-    <input type="text"
-           name="reason"
-           maxlength="250"
-           placeholder="Anything the manager should know? (optional)">
+                  <input type="text"
+                         name="reason"
+                         maxlength="250"
+                         placeholder="Anything the manager should know? (optional)">
 
-    <button class="mini-btn danger" type="submit">
-      Tell manager
-    </button>
-  </form>
-</details>
+                  <button class="mini-btn danger" type="submit">
+                    Tell manager
+                  </button>
+                </form>
+              </details>
               {% endif %}
             </div>
           </article>
-        {% empty %}<p class="empty-copy">No published upcoming shifts yet.</p>{% endfor %}
+        {% endfor %}
+
+
+        {% for item in area_only_shifts %}
+          <article class="staff-shift simple-shift">
+            <div class="shift-date">
+              <strong>{{ item.date|date:"D" }}</strong>
+              <span>{{ item.date|date:"d M" }}</span>
+            </div>
+
+            <div class="shift-main">
+              <strong>{{ item.get_department_display|upper }}</strong>
+            </div>
+          </article>
+        {% endfor %}
+
+
+        {% if not shift_rows and not area_only_shifts %}
+          <p class="empty-copy">
+            No published upcoming shifts yet.
+          </p>
+        {% endif %}
+
         </div>
+
       </section>
 
 
