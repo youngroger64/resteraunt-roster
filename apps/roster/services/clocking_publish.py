@@ -80,3 +80,73 @@ def validate_roster_with_clocking(roster):
         "result": result,
         "roster_only": payload.get("roster_only", []),
     }
+
+
+CLOCKING_PUBLISH_EMPLOYEE_URL = (
+    "http://127.0.0.1:8000/api/v1/roster/publish-employee/"
+)
+
+
+def publish_employee_roster_to_clocking(roster, employee):
+    token = (
+        os.environ.get("ROSTER_INTEGRATION_TOKEN") or ""
+    ).strip()
+
+    if not token:
+        raise RuntimeError(
+            "ROSTER_INTEGRATION_TOKEN is not configured."
+        )
+
+    external_id = (employee.external_id or "").strip()
+
+    # Roster-only employees have no clocking record to update.
+    if not external_id:
+        return {
+            "ok": True,
+            "roster_only": True,
+            "employee": employee.full_name,
+        }
+
+    shifts = []
+
+    for shift in (
+        roster.shifts
+        .filter(employee=employee)
+        .order_by("date", "start_time")
+    ):
+        shifts.append({
+            "employee_number": external_id,
+            "date": shift.date.isoformat(),
+            "start_time": shift.start_time.strftime("%H:%M"),
+            "end_time": shift.end_time.strftime("%H:%M"),
+        })
+
+    payload = {
+        "week_start": roster.week_start.isoformat(),
+        "employee_number": external_id,
+        "shifts": shifts,
+    }
+
+    request = urllib.request.Request(
+        CLOCKING_PUBLISH_EMPLOYEE_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "X-Integration-Token": token,
+        },
+        method="POST",
+    )
+
+    with urllib.request.urlopen(
+        request,
+        timeout=15,
+    ) as response:
+        result = json.load(response)
+
+    if not result.get("ok") or not result.get("published"):
+        raise RuntimeError(
+            result.get("error")
+            or "Clocking employee roster update failed."
+        )
+
+    return result

@@ -41,7 +41,13 @@
 {% if shift_change_requests or open_shift_requests %}
 <section class="card manager-attention print-hide">
   <h2 class="manager-section-title">Staff requests</h2>
-  <p class="muted">Published shifts stay assigned until you approve a change.</p>
+  <p class="muted">
+    You can give the shift to someone else, adjust the employee's shift times,
+    or swap their shift with another employee's shift.
+    Once you approve a change, the roster is updated and the employee will see
+    the change on their Staff page. Until then, their original published shift
+    remains unchanged.
+  </p>
 
   {% for item in shift_change_requests %}
     <article class="attention-item">
@@ -56,14 +62,14 @@
         <div class="candidate-card">
           <div class="candidate-rank">{{ forloop.counter }}</div>
           <div class="candidate-copy"><strong>{{ choice.name }}</strong>{% if choice.reasons %}<ul class="candidate-reasons">{% for reason in choice.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}</div>
-          <form method="post" action="{% url 'roster:replace_requested_shift' roster.pk item.response.pk choice.employee_id %}">{% csrf_token %}<button class="btn {% if forloop.first %}primary{% endif %}">Move shift</button></form>
+          <form method="post" action="{% url 'roster:replace_requested_shift' roster.pk item.response.pk choice.employee_id %}">{% csrf_token %}<button class="btn {% if forloop.first %}primary{% endif %}">Give shift</button></form>
         </div>
         {% endfor %}
       </div>
       {% endif %}
 
       <div class="manager-employee-choice">
-        <strong>Choose someone else</strong>
+        <strong>Give shift to someone else</strong>
         <p class="muted">Start typing a staff name.</p>
 
         <form method="post"
@@ -88,8 +94,44 @@
           <button type="submit"
                   class="btn primary manager-move-selected"
                   disabled>
-            Move shift
+            Give shift
           </button>
+        </form>
+      </div>
+
+      <div class="manager-employee-choice" style="margin-top:16px;">
+        <strong>Adjust this shift</strong>
+
+        <p class="muted">
+          Keep {{ item.response.employee.full_name }} on the shift but change the start or finish time.
+        </p>
+
+        <form method="post"
+              action="{% url 'roster:adjust_requested_shift' roster.pk item.response.pk %}"
+              onsubmit="return confirm('Save these new shift times? The employee roster will be updated.');">
+          {% csrf_token %}
+
+          <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:end; margin-bottom:10px;">
+            <label>
+              <div class="muted">Start</div>
+              <input type="time"
+                     name="start_time"
+                     value="{{ item.shift.start_time|time:'H:i' }}"
+                     required>
+            </label>
+
+            <label>
+              <div class="muted">Finish</div>
+              <input type="time"
+                     name="end_time"
+                     value="{{ item.shift.end_time|time:'H:i' }}"
+                     required>
+            </label>
+
+            <button class="btn primary" type="submit">
+              Save adjusted shift
+            </button>
+          </div>
         </form>
       </div>
 

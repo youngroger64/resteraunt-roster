@@ -818,9 +818,53 @@ def roster_detail(request, pk):
             })
             if len(choices) == 5:
                 break
-        # Existing assigned shifts which could sensibly be exchanged
+        # Existing assigned shifts which could genuinely be exchanged
         # with the shift this employee cannot work.
+        #
+        # Do not show swaps that would create an overlap for either
+        # employee. The POST handler validates this again before saving.
         swap_choices = []
+
+        def _shift_interval(roster_shift):
+            from datetime import datetime, timedelta
+
+            start_dt = datetime.combine(
+                roster_shift.date,
+                roster_shift.start_time,
+            )
+            end_dt = datetime.combine(
+                roster_shift.date,
+                roster_shift.end_time,
+            )
+
+            if end_dt <= start_dt:
+                end_dt += timedelta(days=1)
+
+            return start_dt, end_dt
+
+        def _would_overlap(employee, proposed_shift, ignored_ids):
+            proposed_start, proposed_end = _shift_interval(
+                proposed_shift
+            )
+
+            existing_shifts = (
+                roster.shifts
+                .filter(employee=employee)
+                .exclude(pk__in=ignored_ids)
+            )
+
+            for existing_shift in existing_shifts:
+                existing_start, existing_end = _shift_interval(
+                    existing_shift
+                )
+
+                if (
+                    proposed_start < existing_end
+                    and existing_start < proposed_end
+                ):
+                    return True
+
+            return False
 
         for candidate_shift in (
             roster.shifts
@@ -845,6 +889,29 @@ def roster_detail(request, pk):
             if not compatible(
                 response.employee,
                 candidate_shift.department,
+            ):
+                continue
+
+            ignored_ids = [
+                shift.pk,
+                candidate_shift.pk,
+            ]
+
+            # Can the other employee take Catherine's/current shift
+            # without clashing with one of their remaining shifts?
+            if _would_overlap(
+                candidate_shift.employee,
+                shift,
+                ignored_ids,
+            ):
+                continue
+
+            # Can Catherine/current employee take the other shift
+            # without clashing with one of their remaining shifts?
+            if _would_overlap(
+                response.employee,
+                candidate_shift,
+                ignored_ids,
             ):
                 continue
 
@@ -2967,3 +3034,136 @@ def roster_live_status(request, pk):
         }
     )
 
+
+
+@login_required
+def adjust_requested_shift(request, pk, response_id):
+    """
+    Keep the employee on their published shift but adjust its start/end
+    time in response to a staff cannot-work request.
+    """
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+
+    from datetime import time
+    from django.db import transaction
+    from apps.roster.services.clocking_publish import (
+        publish_employee_roster_to_clocking,
+    )
+
+    roster = get_object_or_404(RosterWeek, pk=pk)
+
+    response = get_object_or_404(
+        ShiftResponse.objects.select_related(
+            "shift",
+            "employee",
+        ),
+        pk=response_id,
+        shift__roster_week=roster,
+        status=ShiftResponseStatus.CANNOT_WORK,
+    )
+
+    shift = response.shift
+    employee = response.employee
+
+    start_value = (request.POST.get("start_time") or "").strip()
+    end_value = (request.POST.get("end_time") or "").strip()
+
+    if not start_value or not end_value:
+        messages.error(
+            request,
+            "Enter both the new start and finish times.",
+        )
+        return redirect("roster:detail", pk=pk)
+
+    try:
+        start_parts = [int(x) for x in start_value.split(":")]
+        end_parts = [int(x) for x in end_value.split(":")]
+
+        new_start = time(start_parts[0], start_parts[1])
+        new_end = time(end_parts[0], end_parts[1])
+    except Exception:
+        messages.error(request, "Enter valid shift times.")
+        return redirect("roster:detail", pk=pk)
+
+    old_start = shift.start_time
+    old_end = shift.end_time
+
+    try:
+        with transaction.atomic():
+            shift.start_time = new_start
+            shift.end_time = new_end
+            shift.source = "manager_adjustment"
+            shift.notes = (
+                (shift.notes + " | ")
+                if shift.notes else ""
+            ) + "Adjusted after staff request"
+
+            shift.save(
+                update_fields=[
+                    "start_time",
+                    "end_time",
+                    "source",
+                    "notes",
+                    "updated_at",
+                ]
+            )
+
+            # For published rosters, immediately replace only this
+            # employee's week in the clocking application.
+            if roster.status == RosterStatus.PUBLISHED:
+                publish_employee_roster_to_clocking(
+                    roster,
+                    employee,
+                )
+
+            response.status = ShiftResponseStatus.RESOLVED
+            response.resolved_at = timezone.now()
+            response.resolved_by = request.user
+
+            # An adjusted shift satisfies the original request.
+            response.wants_replacement_shift = False
+
+            response.save(
+                update_fields=[
+                    "status",
+                    "resolved_at",
+                    "resolved_by",
+                    "wants_replacement_shift",
+                    "updated_at",
+                ]
+            )
+
+            if roster.status == RosterStatus.PUBLISHED:
+                StaffRosterNotice.objects.create(
+                    employee=employee,
+                    roster_week=roster,
+                    message=(
+                        f"Roster changed: "
+                        f"{shift.date.strftime('%a %d %b')} "
+                        f"is now "
+                        f"{new_start.strftime('%H:%M')}–"
+                        f"{new_end.strftime('%H:%M')} "
+                        f"instead of "
+                        f"{old_start.strftime('%H:%M')}–"
+                        f"{old_end.strftime('%H:%M')}."
+                    ),
+                )
+
+    except Exception as exc:
+        messages.error(
+            request,
+            f"Shift was not changed: {exc}",
+        )
+        return redirect("roster:detail", pk=pk)
+
+    messages.success(
+        request,
+        (
+            f"{employee.full_name}'s shift was adjusted to "
+            f"{new_start.strftime('%H:%M')}–"
+            f"{new_end.strftime('%H:%M')}."
+        ),
+    )
+
+    return redirect("roster:detail", pk=pk)
