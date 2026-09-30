@@ -8,3 +8,4 @@ staticfiles/
 *.bak
 *.bak_*
 *.before_*
+.venv/
