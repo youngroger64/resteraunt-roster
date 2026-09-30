@@ -47,10 +47,12 @@
       </form>
       {% endif %}
 
+      {% if roster.status != "published" %}
       <a class="danger-link"
          href="{% url 'roster:delete' roster.pk %}">
         Delete
       </a>
+      {% endif %}
     </div>
   </td>
 </tr>

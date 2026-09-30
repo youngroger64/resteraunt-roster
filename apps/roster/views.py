@@ -35,6 +35,9 @@ from .services.generator import (
     candidate_availability,
     compatible,
     copy_roster,
+    find_roster_overlap,
+    rank_available_replacements,
+    intervals_overlap,
     generate_business_roster,
     parse_signature,
     rank_candidates,
@@ -43,6 +46,12 @@ from .services.generator import (
 )
 from .services.learner import learn_patterns
 from .services.publisher import publish_roster
+from .services.clocking_publish import (
+    ClockingPublishError,
+    format_clocking_warning,
+    publish_employee_roster_to_clocking,
+    publish_week_to_clocking,
+)
 from apps.roster.services.clocking_import import import_clocking_patterns
 
 from apps.roster.services.generator import copied_shift_availability_issues
@@ -796,28 +805,24 @@ def roster_detail(request, pk):
     ).select_related("shift", "employee"):
         shift = response.shift
         signature = f"{shift.start_time.strftime('%H:%M')}-{shift.end_time.strftime('%H:%M')}"
-        ranked = rank_candidates(
+        ranked = rank_available_replacements(
             roster=roster,
-            patterns=patterns,
-            weekday=shift.date.weekday(),
+            employees=Employee.objects.filter(is_active=True),
+            patterns_by_employee=patterns_by_employee,
             department=shift.department,
             signature=signature,
-            current_hours=current_hours,
-            current_days=current_days,
             shift_date=shift.date,
+            ignore_pk=shift.pk,
+            exclude_employee_id=response.employee_id,
         )
         choices = []
-        for item in ranked:
-            candidate = item["pattern"].employee
-            if candidate.pk == response.employee_id:
-                continue
+        for item in ranked[:5]:
+            candidate = item["employee"]
             choices.append({
                 "employee_id": candidate.pk,
                 "name": candidate.full_name,
                 "reasons": item["reasons"],
             })
-            if len(choices) == 5:
-                break
         # Existing assigned shifts which could genuinely be exchanged
         # with the shift this employee cannot work.
         #
@@ -1642,6 +1647,19 @@ def save_cell(request, pk):
         return HttpResponseBadRequest("POST required")
 
     roster = get_object_or_404(RosterWeek, pk=pk)
+    if roster.status != RosterStatus.DRAFT:
+        message = (
+            "This roster has already been sent. "
+            "Use Shift changes to update a shift."
+        )
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse(
+                {"ok": False, "error": message},
+                status=400,
+            )
+        messages.error(request, message)
+        return redirect("roster:detail", pk=pk)
+
     employee = get_object_or_404(
         Employee,
         pk=request.POST["employee_id"],
@@ -1743,6 +1761,45 @@ def save_cell(request, pk):
             messages.error(request, message)
             return redirect("roster:detail", pk=pk)
 
+        replaced_ids = list(
+            Shift.objects.filter(
+                roster_week=roster,
+                employee=employee,
+                date=shift_date,
+            ).values_list("pk", flat=True)
+        )
+        for index, (_segment, start_time, end_time) in enumerate(parsed):
+            overlaps_existing = find_roster_overlap(
+                roster,
+                employee,
+                shift_date,
+                start_time,
+                end_time,
+                ignore_pks=replaced_ids,
+            )
+            overlaps_new_part = any(
+                intervals_overlap(
+                    shift_date,
+                    start_time,
+                    end_time,
+                    shift_date,
+                    earlier_start,
+                    earlier_end,
+                )
+                for _earlier_segment, earlier_start, earlier_end in parsed[:index]
+            )
+            if overlaps_existing or overlaps_new_part:
+                message = (
+                    f"{employee.full_name} is already rostered during this time."
+                )
+                if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                    return JsonResponse(
+                        {"ok": False, "error": message},
+                        status=400,
+                    )
+                messages.error(request, message)
+                return redirect("roster:detail", pk=pk)
+
     Shift.objects.filter(
         roster_week=roster,
         employee=employee,
@@ -1820,7 +1877,14 @@ def roster_publish(request, pk):
     roster = get_object_or_404(RosterWeek, pk=pk)
 
     try:
+        # Clocking must accept the week before the local status changes.
+        result = publish_week_to_clocking(roster)
         publish_roster(roster, request.user)
+    except ClockingPublishError as exc:
+        messages.error(request, str(exc))
+        for warning in exc.warnings:
+            messages.warning(request, format_clocking_warning(warning))
+        return redirect("roster:detail", pk=pk)
     except ValidationError as exc:
         message = (
             exc.messages[0]
@@ -1830,6 +1894,8 @@ def roster_publish(request, pk):
         messages.error(request, message)
         return redirect("roster:detail", pk=pk)
 
+    for warning in result.get("warnings") or []:
+        messages.warning(request, format_clocking_warning(warning))
     messages.success(request, "Roster published.")
     return redirect("roster:detail", pk=pk)
 
@@ -2133,8 +2199,21 @@ def replace_requested_shift(request, pk, response_id, employee_id):
         shift_date=shift.date,
         signature=signature,
     )
-    if not availability["available"]:
+    if not availability["available"] and not _is_schedule_gap_reason(availability["reason"]):
         messages.error(request, f"{replacement.full_name} is not available: {availability['reason']}")
+        return redirect("roster:detail", pk=pk)
+    if find_roster_overlap(
+        roster,
+        replacement,
+        shift.date,
+        shift.start_time,
+        shift.end_time,
+        ignore_pk=shift.pk,
+    ):
+        messages.error(
+            request,
+            f"{replacement.full_name} is already rostered during this time.",
+        )
         return redirect("roster:detail", pk=pk)
     if shift.department == Department.BAR and not replacement.can_work_bar:
         messages.error(request, "That employee cannot work Bar.")
@@ -2151,52 +2230,69 @@ def replace_requested_shift(request, pk, response_id, employee_id):
         f"{shift.end_time.strftime('%H:%M')}"
     )
 
-    shift.employee = replacement
-    shift.source = "manager_rearrange"
-    shift.notes = (shift.notes + " | " if shift.notes else "") + f"Reassigned from {original_name}"
-    shift.save(update_fields=["employee", "source", "notes", "updated_at"])
-
-    # If the replacement employee previously gave up a shift in this
-    # roster and asked for replacement hours, this newly assigned shift
-    # satisfies one outstanding request.
-    outstanding_hours_request = (
-        ShiftResponse.objects
-        .filter(
-            shift__roster_week=roster,
-            employee=replacement,
-            status=ShiftResponseStatus.RESOLVED,
-            wants_replacement_shift=True,
-        )
-        .order_by("created_at")
-        .first()
-    )
-
-    if outstanding_hours_request:
-        outstanding_hours_request.wants_replacement_shift = False
-        outstanding_hours_request.save(
-            update_fields=[
-                "wants_replacement_shift",
-                "updated_at",
-            ]
-        )
-
-    response.status = ShiftResponseStatus.RESOLVED
-    response.resolved_at = timezone.now()
-    response.resolved_by = request.user
-    response.save(update_fields=["status", "resolved_at", "resolved_by", "updated_at"])
-
     if roster.status == RosterStatus.PUBLISHED:
-        StaffRosterNotice.objects.create(
-            employee=original_employee,
-            roster_week=roster,
-            message=f"Your {old_display} shift was changed.",
-        )
+        missing_clocking_id = _missing_clocking_ids([
+            original_employee,
+            replacement,
+        ])
+        if missing_clocking_id:
+            messages.error(request, missing_clocking_id)
+            return redirect("roster:detail", pk=pk)
 
-        StaffRosterNotice.objects.create(
-            employee=replacement,
-            roster_week=roster,
-            message=f"New shift: {old_display}.",
-        )
+    try:
+        with transaction.atomic():
+            shift.employee = replacement
+            shift.source = "manager_rearrange"
+            shift.notes = (shift.notes + " | " if shift.notes else "") + f"Reassigned from {original_name}"
+            shift.save(update_fields=["employee", "source", "notes", "updated_at"])
+
+            # If the replacement employee previously gave up a shift in this
+            # roster and asked for replacement hours, this newly assigned shift
+            # satisfies one outstanding request.
+            outstanding_hours_request = (
+                ShiftResponse.objects
+                .filter(
+                    shift__roster_week=roster,
+                    employee=replacement,
+                    status=ShiftResponseStatus.RESOLVED,
+                    wants_replacement_shift=True,
+                )
+                .order_by("created_at")
+                .first()
+            )
+
+            if outstanding_hours_request:
+                outstanding_hours_request.wants_replacement_shift = False
+                outstanding_hours_request.save(
+                    update_fields=[
+                        "wants_replacement_shift",
+                        "updated_at",
+                    ]
+                )
+
+            if roster.status == RosterStatus.PUBLISHED:
+                publish_week_to_clocking(roster)
+
+            response.status = ShiftResponseStatus.RESOLVED
+            response.resolved_at = timezone.now()
+            response.resolved_by = request.user
+            response.save(update_fields=["status", "resolved_at", "resolved_by", "updated_at"])
+
+            if roster.status == RosterStatus.PUBLISHED:
+                StaffRosterNotice.objects.create(
+                    employee=original_employee,
+                    roster_week=roster,
+                    message=f"Your {old_display} shift was changed.",
+                )
+
+                StaffRosterNotice.objects.create(
+                    employee=replacement,
+                    roster_week=roster,
+                    message=f"New shift: {old_display}.",
+                )
+    except ClockingPublishError as exc:
+        messages.error(request, _plain_clocking_error(exc))
+        return redirect("roster:detail", pk=pk)
 
     messages.success(request, f"Shift moved from {original_name} to {replacement.full_name}.")
     return redirect("roster:detail", pk=pk)
@@ -2251,6 +2347,13 @@ def decline_open_shift_request(request, pk, request_id):
 @login_required
 def roster_delete(request, pk):
     roster = get_object_or_404(RosterWeek, pk=pk)
+    if roster.status == RosterStatus.PUBLISHED:
+        messages.error(
+            request,
+            "This roster has already been sent. It cannot be deleted.",
+        )
+        return redirect("roster:list")
+
     shift_count = roster.shifts.count()
     open_shift_count = roster.open_shifts.count()
 
@@ -2550,91 +2653,107 @@ def swap_requested_shift(request, pk, response_id):
         )
         return redirect("roster:detail", pk=pk)
 
+    if roster.status == RosterStatus.PUBLISHED:
+        missing_clocking_id = _missing_clocking_ids([
+            original_employee,
+            other_employee,
+        ])
+        if missing_clocking_id:
+            messages.error(request, missing_clocking_id)
+            return redirect("roster:detail", pk=pk)
+
     # Avoid the employee/date/segment uniqueness constraint by using
     # a transaction and temporarily moving one shift's segment.
-    with transaction.atomic():
-        original_segment = original_shift.segment
-        other_segment = other_shift.segment
+    try:
+        with transaction.atomic():
+            original_segment = original_shift.segment
+            other_segment = other_shift.segment
 
-        temporary_segment = 999
+            temporary_segment = 999
 
-        while Shift.objects.filter(
-            roster_week=roster,
-            employee=original_employee,
-            date=original_shift.date,
-            segment=temporary_segment,
-        ).exists():
-            temporary_segment += 1
-
-        original_shift.segment = temporary_segment
-        original_shift.save(
-            update_fields=["segment", "updated_at"],
-        )
-
-        other_shift.employee = original_employee
-        other_shift.source = "manager_swap"
-        other_shift.notes = (
-            (other_shift.notes + " | ")
-            if other_shift.notes else ""
-        ) + f"Swapped with {other_employee.full_name}"
-        other_shift.save(
-            update_fields=[
-                "employee",
-                "source",
-                "notes",
-                "updated_at",
-            ],
-        )
-
-        original_shift.employee = other_employee
-        original_shift.segment = original_segment
-        original_shift.source = "manager_swap"
-        original_shift.notes = (
-            (original_shift.notes + " | ")
-            if original_shift.notes else ""
-        ) + f"Swapped with {original_employee.full_name}"
-        original_shift.save(
-            update_fields=[
-                "employee",
-                "segment",
-                "source",
-                "notes",
-                "updated_at",
-            ],
-        )
-
-        response.status = ShiftResponseStatus.RESOLVED
-        response.resolved_at = timezone.now()
-        response.resolved_by = request.user
-        response.save(
-            update_fields=[
-                "status",
-                "resolved_at",
-                "resolved_by",
-                "updated_at",
-            ],
-        )
-
-        if roster.status == RosterStatus.PUBLISHED:
-            StaffRosterNotice.objects.create(
+            while Shift.objects.filter(
+                roster_week=roster,
                 employee=original_employee,
-                roster_week=roster,
-                message=(
-                    f"Roster changed: you now have "
-                    f"{other_display} instead of "
-                    f"{original_display}."
-                ),
+                date=original_shift.date,
+                segment=temporary_segment,
+            ).exists():
+                temporary_segment += 1
+
+            original_shift.segment = temporary_segment
+            original_shift.save(
+                update_fields=["segment", "updated_at"],
             )
 
-            StaffRosterNotice.objects.create(
-                employee=other_employee,
-                roster_week=roster,
-                message=(
-                    f"Roster changed: you now have "
-                    f"{original_display} instead of "
-                    f"{other_display}."
-                ),
+            other_shift.employee = original_employee
+            other_shift.source = "manager_swap"
+            other_shift.notes = (
+                (other_shift.notes + " | ")
+                if other_shift.notes else ""
+            ) + f"Swapped with {other_employee.full_name}"
+            other_shift.save(
+                update_fields=[
+                    "employee",
+                    "source",
+                    "notes",
+                    "updated_at",
+                ],
             )
+
+            original_shift.employee = other_employee
+            original_shift.segment = original_segment
+            original_shift.source = "manager_swap"
+            original_shift.notes = (
+                (original_shift.notes + " | ")
+                if original_shift.notes else ""
+            ) + f"Swapped with {original_employee.full_name}"
+            original_shift.save(
+                update_fields=[
+                    "employee",
+                    "segment",
+                    "source",
+                    "notes",
+                    "updated_at",
+                ],
+            )
+
+            if roster.status == RosterStatus.PUBLISHED:
+                publish_week_to_clocking(roster)
+
+            response.status = ShiftResponseStatus.RESOLVED
+            response.resolved_at = timezone.now()
+            response.resolved_by = request.user
+            response.save(
+                update_fields=[
+                    "status",
+                    "resolved_at",
+                    "resolved_by",
+                    "updated_at",
+                ],
+            )
+
+            if roster.status == RosterStatus.PUBLISHED:
+                StaffRosterNotice.objects.create(
+                    employee=original_employee,
+                    roster_week=roster,
+                    message=(
+                        f"Roster changed: you now have "
+                        f"{other_display} instead of "
+                        f"{original_display}."
+                    ),
+                )
+
+                StaffRosterNotice.objects.create(
+                    employee=other_employee,
+                    roster_week=roster,
+                    message=(
+                        f"Roster changed: you now have "
+                        f"{original_display} instead of "
+                        f"{other_display}."
+                    ),
+                )
+    except ClockingPublishError as exc:
+        messages.error(request, _plain_clocking_error(exc))
+        return redirect("roster:detail", pk=pk)
 
     messages.success(
         request,
@@ -2658,6 +2777,12 @@ def edit_shift(request, pk, shift_id):
     )
 
     if request.method == "POST":
+        if roster.status != RosterStatus.DRAFT:
+            messages.error(
+                request,
+                "This roster has already been sent. Use Shift changes to update a shift.",
+            )
+            return redirect("roster:detail", pk=pk)
         employee_id = request.POST.get("employee_id")
         start_value = request.POST.get("start_time")
         end_value = request.POST.get("end_time")
@@ -2680,6 +2805,20 @@ def edit_shift(request, pk, shift_id):
             end_time = time(end_parts[0], end_parts[1])
         except Exception:
             messages.error(request, "Enter valid times.")
+            return redirect("roster:edit_shift", pk=pk, shift_id=shift_id)
+
+        if find_roster_overlap(
+            roster,
+            employee,
+            shift.date,
+            start_time,
+            end_time,
+            ignore_pk=shift.pk,
+        ):
+            messages.error(
+                request,
+                f"{employee.full_name} is already rostered during this time.",
+            )
             return redirect("roster:edit_shift", pk=pk, shift_id=shift_id)
 
         shift.employee = employee
@@ -2831,6 +2970,320 @@ def set_default_roster(request, pk):
         pk=source.pk,
     )
 
+def _missing_clocking_ids(employees):
+    names = []
+    seen = set()
+    for employee in employees:
+        if employee.pk in seen:
+            continue
+        seen.add(employee.pk)
+        if not (getattr(employee, "external_id", "") or "").strip():
+            names.append(employee.full_name)
+    if not names:
+        return ""
+    if len(names) == 1:
+        return (
+            f"{names[0]} has no clocking ID, so this change cannot be sent."
+        )
+    return (
+        "These employees have no clocking ID, so this change cannot be sent: "
+        + ", ".join(names)
+        + "."
+    )
+
+
+def _plain_clocking_error(exc):
+    text = str(exc).strip()
+    if "no clocking ID" in text:
+        return text
+    if text.startswith("Could not reach"):
+        return (
+            "This change was not saved because the clocking system "
+            "could not be reached."
+        )
+    if text.startswith("This change was not saved"):
+        return text
+    return "This change was not saved. " + text
+
+
+def _parse_panel_time(value):
+    from datetime import time as clock_time
+
+    text = (value or "").strip()
+    parts = text.split(":")
+    if len(parts) < 2:
+        raise ValueError
+    hour = int(parts[0])
+    minute = int(parts[1])
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        raise ValueError
+    return clock_time(hour, minute)
+
+
+def _is_schedule_gap_reason(reason):
+    text = reason or ""
+    return text.startswith("Already working") or text.startswith("Less than 90 minutes")
+
+
+def _shift_overlaps(roster, employee, shift_date, start_time, end_time, ignore_pk=None):
+    return find_roster_overlap(
+        roster,
+        employee,
+        shift_date,
+        start_time,
+        end_time,
+        ignore_pk=ignore_pk,
+    )
+
+
+def _segment_for_shift(roster, employee, shift_date, current_segment, ignore_pk=None):
+    used = set(
+        Shift.objects.filter(
+            roster_week=roster,
+            employee=employee,
+            date=shift_date,
+        ).exclude(pk=ignore_pk).values_list("segment", flat=True)
+    )
+    if current_segment not in used:
+        return current_segment
+    segment = 1
+    while segment in used:
+        segment += 1
+    return segment
+
+
+def _time_change_message(old_date, old_start, old_end, shift):
+    old_label = (
+        f"{old_date.strftime('%a %d %b')} "
+        f"{old_start.strftime('%H:%M')}–{old_end.strftime('%H:%M')}"
+    )
+    new_label = (
+        f"{shift.date.strftime('%a %d %b')} "
+        f"{shift.start_time.strftime('%H:%M')}–{shift.end_time.strftime('%H:%M')}"
+    )
+    if old_date == shift.date:
+        return (
+            f"Roster changed: {shift.date.strftime('%a %d %b')} is now "
+            f"{shift.start_time.strftime('%H:%M')}–"
+            f"{shift.end_time.strftime('%H:%M')} "
+            f"instead of {old_start.strftime('%H:%M')}–{old_end.strftime('%H:%M')}."
+        )
+    return f"Roster changed: {new_label} instead of {old_label}."
+
+
+def _shift_stamp(shift):
+    return (
+        f"{shift.date.strftime('%a %d %b')} · "
+        f"{shift.start_time.strftime('%H:%M')}–"
+        f"{shift.end_time.strftime('%H:%M')}"
+    )
+
+
+@login_required
+def shift_change(request, pk):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+
+    roster = get_object_or_404(RosterWeek, pk=pk)
+    shift_id = (request.POST.get("shift_id") or "").strip()
+    employee = get_object_or_404(
+        Employee,
+        pk=request.POST.get("employee_id"),
+        is_active=True,
+    )
+
+    try:
+        shift_date = date.fromisoformat(request.POST.get("date") or "")
+        start_time = _parse_panel_time(request.POST.get("start_time"))
+        end_time = _parse_panel_time(request.POST.get("end_time"))
+    except (TypeError, ValueError):
+        messages.error(request, "Enter a date, a start time, and a finish time.")
+        return redirect("roster:detail", pk=pk)
+
+    if not (roster.week_start <= shift_date <= roster.week_end):
+        messages.error(request, "That date is outside this roster week.")
+        return redirect("roster:detail", pk=pk)
+
+    shift = None
+    if shift_id:
+        shift = get_object_or_404(
+            Shift.objects.select_related("employee"),
+            pk=shift_id,
+            roster_week=roster,
+        )
+        if not compatible(employee, shift.department):
+            messages.error(
+                request,
+                f"{employee.full_name} cannot work {shift.get_department_display()}.",
+            )
+            return redirect("roster:detail", pk=pk)
+
+    overlap = _shift_overlaps(
+        roster,
+        employee,
+        shift_date,
+        start_time,
+        end_time,
+        ignore_pk=shift.pk if shift else None,
+    )
+    if overlap:
+        messages.error(
+            request,
+            (
+                f"{employee.full_name} already has a shift on "
+                f"{overlap.date.strftime('%a %d %b')}."
+            ),
+        )
+        return redirect("roster:detail", pk=pk)
+
+    published = roster.status == RosterStatus.PUBLISHED
+    previous_employee = shift.employee if shift else None
+    if published:
+        people = [employee]
+        if previous_employee is not None:
+            people.append(previous_employee)
+        missing_clocking_id = _missing_clocking_ids(people)
+        if missing_clocking_id:
+            messages.error(request, missing_clocking_id)
+            return redirect("roster:detail", pk=pk)
+
+    try:
+        with transaction.atomic():
+            if shift is None:
+                shift = Shift.objects.create(
+                    roster_week=roster,
+                    employee=employee,
+                    department=employee.department,
+                    date=shift_date,
+                    start_time=start_time,
+                    end_time=end_time,
+                    segment=_segment_for_shift(
+                        roster,
+                        employee,
+                        shift_date,
+                        1,
+                    ),
+                    source="manual",
+                    confidence=100,
+                    notes="Added by manager",
+                )
+                if published:
+                    publish_employee_roster_to_clocking(roster, employee)
+                    StaffRosterNotice.objects.create(
+                        employee=employee,
+                        roster_week=roster,
+                        message=f"New shift: {_shift_stamp(shift)}.",
+                    )
+                messages.success(
+                    request,
+                    (
+                        f"Added shift for {employee.full_name}: "
+                        f"{_shift_stamp(shift)}."
+                    ),
+                )
+            else:
+                old_date = shift.date
+                old_start = shift.start_time
+                old_end = shift.end_time
+                old_employee = shift.employee
+                employee_changed = old_employee.pk != employee.pk
+                shift.employee = employee
+                shift.date = shift_date
+                shift.start_time = start_time
+                shift.end_time = end_time
+                shift.segment = _segment_for_shift(
+                    roster,
+                    employee,
+                    shift_date,
+                    shift.segment,
+                    ignore_pk=shift.pk,
+                )
+                shift.save()
+                if published:
+                    if employee_changed:
+                        publish_week_to_clocking(roster)
+                        StaffRosterNotice.objects.create(
+                            employee=old_employee,
+                            roster_week=roster,
+                            message=f"Your {_shift_stamp_from(old_date, old_start, old_end)} shift was changed.",
+                        )
+                        StaffRosterNotice.objects.create(
+                            employee=employee,
+                            roster_week=roster,
+                            message=f"New shift: {_shift_stamp(shift)}.",
+                        )
+                    else:
+                        publish_employee_roster_to_clocking(roster, employee)
+                        StaffRosterNotice.objects.create(
+                            employee=employee,
+                            roster_week=roster,
+                            message=_time_change_message(
+                                old_date,
+                                old_start,
+                                old_end,
+                                shift,
+                            ),
+                        )
+                messages.success(
+                    request,
+                    f"Saved {employee.full_name}'s shift.",
+                )
+    except ClockingPublishError as exc:
+        messages.error(request, _plain_clocking_error(exc))
+
+    return redirect("roster:detail", pk=pk)
+
+
+def _shift_stamp_from(shift_date, start_time, end_time):
+    return (
+        f"{shift_date.strftime('%a %d %b')} · "
+        f"{start_time.strftime('%H:%M')}–{end_time.strftime('%H:%M')}"
+    )
+
+
+@login_required
+def shift_change_cancel(request, pk):
+    if request.method != "POST":
+        return HttpResponseBadRequest("POST required")
+
+    roster = get_object_or_404(RosterWeek, pk=pk)
+    shift = get_object_or_404(
+        Shift.objects.select_related("employee"),
+        pk=request.POST.get("shift_id"),
+        roster_week=roster,
+    )
+    employee = shift.employee
+    stamp = _shift_stamp(shift)
+    published = roster.status == RosterStatus.PUBLISHED
+
+    if published:
+        missing_clocking_id = _missing_clocking_ids([employee])
+        if missing_clocking_id:
+            messages.error(request, missing_clocking_id)
+            return redirect("roster:detail", pk=pk)
+
+    try:
+        with transaction.atomic():
+            if published:
+                publish_employee_roster_to_clocking(
+                    roster,
+                    employee,
+                    removed_shift_ids=[shift.pk],
+                )
+                StaffRosterNotice.objects.create(
+                    employee=employee,
+                    roster_week=roster,
+                    message=f"Shift cancelled: {stamp}.",
+                )
+            shift.delete()
+    except ClockingPublishError as exc:
+        messages.error(request, _plain_clocking_error(exc))
+        return redirect("roster:detail", pk=pk)
+
+    messages.success(request, f"Cancelled {employee.full_name}'s shift on {stamp}.")
+    return redirect("roster:detail", pk=pk)
+
+
 @login_required
 def add_shift(request, pk):
     roster = get_object_or_404(RosterWeek, pk=pk)
@@ -2842,6 +3295,12 @@ def add_shift(request, pk):
     )
 
     if request.method == "POST":
+        if roster.status != RosterStatus.DRAFT:
+            messages.error(
+                request,
+                "This roster has already been sent. Use Shift changes to add a shift.",
+            )
+            return redirect("roster:detail", pk=pk)
         employee = get_object_or_404(
             Employee,
             pk=request.POST.get("employee_id"),
@@ -2916,16 +3375,23 @@ def add_shift(request, pk):
             employee=employee,
             shift_date=shift_date,
             signature=signature,
+            overlap_scope="week",
         )
 
         if not availability["available"]:
-            messages.error(
-                request,
-                (
-                    f"{employee.full_name} cannot take that shift: "
-                    f"{availability['reason']}"
-                ),
-            )
+            if availability.get("overlap"):
+                messages.error(
+                    request,
+                    f"{employee.full_name} is already rostered during this time.",
+                )
+            else:
+                messages.error(
+                    request,
+                    (
+                        f"{employee.full_name} cannot take that shift: "
+                        f"{availability['reason']}"
+                    ),
+                )
             return redirect("roster:add_shift", pk=pk)
 
         used_segments = set(
@@ -3084,6 +3550,20 @@ def adjust_requested_shift(request, pk, response_id):
         new_end = time(end_parts[0], end_parts[1])
     except Exception:
         messages.error(request, "Enter valid shift times.")
+        return redirect("roster:detail", pk=pk)
+
+    if find_roster_overlap(
+        roster,
+        employee,
+        shift.date,
+        new_start,
+        new_end,
+        ignore_pk=shift.pk,
+    ):
+        messages.error(
+            request,
+            f"{employee.full_name} is already rostered during this time.",
+        )
         return redirect("roster:detail", pk=pk)
 
     old_start = shift.start_time

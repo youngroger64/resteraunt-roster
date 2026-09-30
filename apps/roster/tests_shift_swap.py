@@ -1,7 +1,9 @@
+import json
 from datetime import date, time
+from unittest import mock
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from apps.employees.models import Department, Employee
@@ -34,6 +36,7 @@ class PublishedShiftSwapTests(TestCase):
             department=Department.RESTAURANT,
             is_active=True,
             can_work_restaurant=True,
+            external_id="801",
         )
 
         self.catherine = Employee.objects.create(
@@ -42,6 +45,7 @@ class PublishedShiftSwapTests(TestCase):
             department=Department.RESTAURANT,
             is_active=True,
             can_work_restaurant=True,
+            external_id="802",
         )
 
         self.cori_shift = Shift.objects.create(
@@ -75,7 +79,32 @@ class PublishedShiftSwapTests(TestCase):
             password="testpass123",
         )
 
-    def test_published_swap_exchanges_employees_and_notifies_both(self):
+    @override_settings(
+        CLOCKING_BASE_URL="http://clocking.test",
+        ROSTER_INTEGRATION_TOKEN="test-token",
+    )
+    @mock.patch("apps.roster.services.clocking_publish.urllib.request.urlopen")
+    def test_published_swap_exchanges_employees_and_notifies_both(self, urlopen):
+        def capture(request, timeout=15):
+            self.assertEqual(
+                request.full_url,
+                "http://clocking.test/api/v1/roster/publish/",
+            )
+            self.sent = json.loads(request.data.decode())
+            response = mock.MagicMock()
+            response.read.return_value = json.dumps({
+                "ok": True,
+                "published": True,
+                "fully_applied": True,
+                "warnings": [],
+            }).encode()
+            response.status = 200
+            context = mock.MagicMock()
+            context.__enter__.return_value = response
+            return context
+
+        urlopen.side_effect = capture
+
         url = reverse(
             "roster:swap_requested_shift",
             args=[self.roster.pk, self.response.pk],
@@ -117,6 +146,12 @@ class PublishedShiftSwapTests(TestCase):
         self.assertTrue(
             notices.filter(employee=self.catherine).exists()
         )
+        by_id = {
+            row["external_shift_id"]: row["employee_number"]
+            for row in self.sent["shifts"]
+        }
+        self.assertEqual(by_id[str(self.cori_shift.pk)], "802")
+        self.assertEqual(by_id[str(self.catherine_shift.pk)], "801")
 
     def test_swap_rejects_same_shift(self):
         url = reverse(

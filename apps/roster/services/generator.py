@@ -89,7 +89,52 @@ def _existing_intervals(roster, employee, shift_date):
     ]
 
 
-def candidate_availability(roster, employee, shift_date, signature):
+def intervals_overlap(left_date, left_start, left_end, right_date, right_start, right_end):
+    """True when two shifts overlap. An exact finish-to-start join does not."""
+    left_start_dt, left_end_dt = _interval(left_date, left_start, left_end)
+    right_start_dt, right_end_dt = _interval(right_date, right_start, right_end)
+    return left_start_dt < right_end_dt and right_start_dt < left_end_dt
+
+
+def find_roster_overlap(
+    roster,
+    employee,
+    shift_date,
+    start_time,
+    end_time,
+    ignore_pk=None,
+    ignore_pks=None,
+):
+    """
+    Return a Roster shift that overlaps this interval, anywhere in the week.
+
+    Finish time equal to the next start time is back-to-back, not an overlap.
+    An overnight shift runs into the following day.
+    ignore_pk and ignore_pks skip the shift or cell being replaced.
+    """
+    existing = Shift.objects.filter(
+        roster_week=roster,
+        employee=employee,
+    )
+    excluded = set(ignore_pks or [])
+    if ignore_pk:
+        excluded.add(ignore_pk)
+    if excluded:
+        existing = existing.exclude(pk__in=excluded)
+    for other in existing:
+        if intervals_overlap(
+            shift_date,
+            start_time,
+            end_time,
+            other.date,
+            other.start_time,
+            other.end_time,
+        ):
+            return other
+    return None
+
+
+def candidate_availability(roster, employee, shift_date, signature, overlap_scope="day", ignore_pk=None):
     proposed = _signature_intervals(shift_date, signature)
 
     # A staff member who has explicitly said they cannot work a shift
@@ -172,6 +217,32 @@ def candidate_availability(roster, employee, shift_date, signature):
                             f"{availability_exception.available_until.strftime('%H:%M')}"
                         ),
                     }
+
+    if overlap_scope == "week":
+        for _segment, start, end in parse_signature(signature):
+            if find_roster_overlap(
+                roster,
+                employee,
+                shift_date,
+                start,
+                end,
+                ignore_pk=ignore_pk,
+            ):
+                return {
+                    "available": False,
+                    "possible_split": False,
+                    "overlap": True,
+                    "reason": "Already rostered",
+                }
+        return {
+            "available": True,
+            "possible_split": False,
+            "reason": (
+                "Matches submitted availability"
+                if availability_exception
+                else "Available for this shift"
+            ),
+        }
 
     existing = _existing_intervals(roster, employee, shift_date)
 
@@ -683,6 +754,8 @@ def rank_candidates(
     current_hours,
     current_days,
     shift_date,
+    overlap_scope="day",
+    ignore_pk=None,
 ):
     ranked = []
 
@@ -700,6 +773,8 @@ def rank_candidates(
             employee=pattern.employee,
             shift_date=shift_date,
             signature=signature,
+            overlap_scope=overlap_scope,
+            ignore_pk=ignore_pk,
         )
 
         if not availability["available"]:
@@ -794,6 +869,116 @@ def rank_candidates(
     )
     return ranked
 
+
+def replacement_suitability_group(employee, department):
+    """
+    0, 1, or 2 for someone allowed to cover this area. None if they cannot.
+
+    The employee's own department comes first. Restaurant staff are the
+    next choice for Kitchen and Bar. Everyone else who is allowed to work
+    the area comes after that.
+    """
+    if not employee.is_active or not compatible(employee, department):
+        return None
+
+    if department == Department.KITCHEN:
+        if employee.department == Department.KITCHEN:
+            return 0
+        if employee.department == Department.RESTAURANT:
+            return 1
+        return 2
+
+    if department == Department.BAR:
+        if employee.department == Department.BAR:
+            return 0
+        if employee.department == Department.RESTAURANT:
+            return 1
+        return 2
+
+    if employee.department == department:
+        return 0
+    return 1
+
+
+def rank_available_replacements(
+    roster,
+    employees,
+    patterns_by_employee,
+    department,
+    signature,
+    shift_date,
+    ignore_pk=None,
+    exclude_employee_id=None,
+):
+    """
+    Available staff for one shift.
+
+    A learned pattern can move someone up inside their suitability group.
+    It is not required for them to appear.
+    """
+    ranked = []
+
+    for employee in employees:
+        if not employee.is_active:
+            continue
+        if exclude_employee_id and employee.pk == exclude_employee_id:
+            continue
+        if (
+            department == Department.RESTAURANT
+            and employee.external_id == "224"
+        ):
+            continue
+
+        group = replacement_suitability_group(employee, department)
+        if group is None:
+            continue
+
+        availability = candidate_availability(
+            roster=roster,
+            employee=employee,
+            shift_date=shift_date,
+            signature=signature,
+            overlap_scope="week",
+            ignore_pk=ignore_pk,
+        )
+        if not availability["available"]:
+            continue
+
+        pattern = patterns_by_employee.get(employee.pk)
+        usual_shift = False
+        if pattern:
+            typical = (pattern.typical_shifts or {}).get(
+                DAY_KEYS[shift_date.weekday()],
+                {},
+            )
+            usual_shift = typical.get("shift") == signature
+
+        learned_area = bool(
+            pattern and pattern.normal_department == department
+        )
+        reasons = [employee.get_department_display()]
+        if usual_shift:
+            reasons.append("Usually works this shift")
+
+        ranked.append(
+            {
+                "employee": employee,
+                "reasons": reasons[:2],
+                "group": group,
+                "learned_area": learned_area,
+                "usual_shift": usual_shift,
+            }
+        )
+
+    ranked.sort(
+        key=lambda item: (
+            item["group"],
+            0 if item["learned_area"] else 1,
+            0 if item["usual_shift"] else 1,
+            item["employee"].full_name.lower(),
+        )
+    )
+    return ranked
 
 
 def signature_slots(signature):

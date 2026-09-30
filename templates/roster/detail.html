@@ -57,6 +57,7 @@
         {% if item.response.reason %}<small>“{{ item.response.reason }}”</small>{% endif %}
       </div>
       {% if item.choices %}
+      <p class="muted">Available staff</p>
       <div class="ranked-candidates">
         {% for choice in item.choices %}
         <div class="candidate-card">
@@ -331,6 +332,78 @@
 
 
 
+<section class="shift-changes print-hide">
+  {% if roster.status != "draft" %}
+    <div class="roster-sent-status shift-changes-sent">
+      ✓ Roster sent to employees
+    </div>
+    <p class="shift-changes-note">
+      Changes made here will update the employee's roster and Clocking.
+    </p>
+  {% endif %}
+
+  <h2>Shift changes</h2>
+
+  <form method="post"
+        action="{% url 'roster:shift_change' roster.pk %}"
+        id="shift-change-form"
+        class="shift-changes-form">
+    {% csrf_token %}
+    <input type="hidden" name="shift_id" id="shift-change-id" value="">
+
+    <label>
+      Employee
+      <select name="employee_id" id="shift-change-employee" required>
+        <option value="">Choose an employee</option>
+        {% for person in manager_employee_choices %}
+          <option value="{{ person.id }}">{{ person.first_name }} {{ person.last_name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label>
+      Date
+      <input type="date"
+             name="date"
+             id="shift-change-date"
+             required
+             min="{{ roster.week_start|date:'Y-m-d' }}"
+             max="{{ roster.week_end|date:'Y-m-d' }}">
+    </label>
+
+    <label>
+      Start
+      <input type="time" name="start_time" id="shift-change-start" required>
+    </label>
+
+    <label>
+      Finish
+      <input type="time" name="end_time" id="shift-change-finish" required>
+    </label>
+
+    <div class="shift-changes-actions">
+      <button class="btn" type="button" id="shift-change-add">
+        + Add shift
+      </button>
+      <button class="btn primary" type="submit" id="shift-change-save" hidden>
+        Save changes
+      </button>
+    </div>
+  </form>
+
+  <form method="post"
+        action="{% url 'roster:shift_change_cancel' roster.pk %}"
+        id="shift-cancel-form"
+        class="shift-cancel-form"
+        onsubmit="return confirm('Cancel this shift?');">
+    {% csrf_token %}
+    <input type="hidden" name="shift_id" id="shift-cancel-id" value="">
+    <button class="btn" type="submit" id="shift-change-cancel" disabled>
+      Cancel shift
+    </button>
+  </form>
+</section>
+
 {% if rows %}
 
 <div class="roster-employee-toggle print-hide">
@@ -404,7 +477,12 @@
                 class="cell-view">
           {% if cell.shifts %}
             {% for shift in cell.shifts %}
-              <span class="cell-shift-line">
+              <span class="cell-shift-line shift-pick"
+                    data-shift-id="{{ shift.pk }}"
+                    data-employee-id="{{ row.employee.pk }}"
+                    data-date="{{ cell.day|date:'Y-m-d' }}"
+                    data-start="{{ shift.start_time|time:'H:i' }}"
+                    data-finish="{{ shift.end_time|time:'H:i' }}">
                 {{ shift.start_time|time:"H:i" }}–{{ shift.end_time|time:"H:i" }}
               </span>
             {% endfor %}
@@ -424,9 +502,15 @@
       </form>
     {% else %}
       {% for shift in cell.shifts %}
-        <div class="shift-chip">
+        <button type="button"
+                class="shift-chip shift-pick"
+                data-shift-id="{{ shift.pk }}"
+                data-employee-id="{{ row.employee.pk }}"
+                data-date="{{ cell.day|date:'Y-m-d' }}"
+                data-start="{{ shift.start_time|time:'H:i' }}"
+                data-finish="{{ shift.end_time|time:'H:i' }}">
           {{ shift.start_time|time:"H:i" }}–{{ shift.end_time|time:"H:i" }}
-        </div>
+        </button>
       {% empty %}
         <span class="off">—</span>
       {% endfor %}
@@ -822,7 +906,10 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
 
-    view.addEventListener("click", openEditor);
+    view.addEventListener("click", function (event) {
+      if (event.target.closest(".shift-pick")) return;
+      openEditor();
+    });
 
     addButton.addEventListener("click", function () {
       const row = makeShiftRow();
@@ -851,6 +938,70 @@ document.addEventListener("DOMContentLoaded", function () {
 </script>
 
 
+
+<script id="shift-changes-panel">
+(function () {
+  const form = document.getElementById("shift-change-form");
+  if (!form) return;
+
+  const shiftId = document.getElementById("shift-change-id");
+  const cancelId = document.getElementById("shift-cancel-id");
+  const employee = document.getElementById("shift-change-employee");
+  const shiftDate = document.getElementById("shift-change-date");
+  const start = document.getElementById("shift-change-start");
+  const finish = document.getElementById("shift-change-finish");
+  const save = document.getElementById("shift-change-save");
+  const add = document.getElementById("shift-change-add");
+  const cancel = document.getElementById("shift-change-cancel");
+
+  function clearSelection() {
+    document.querySelectorAll(".shift-pick.is-selected").forEach(function (el) {
+      el.classList.remove("is-selected");
+    });
+  }
+
+  function setAddMode() {
+    clearSelection();
+    shiftId.value = "";
+    cancelId.value = "";
+    employee.value = "";
+    shiftDate.value = "";
+    start.value = "";
+    finish.value = "";
+    save.hidden = false;
+    save.textContent = "Add shift";
+    cancel.disabled = true;
+  }
+
+  function selectShift(el) {
+    clearSelection();
+    el.classList.add("is-selected");
+    shiftId.value = el.dataset.shiftId || "";
+    cancelId.value = shiftId.value;
+    employee.value = el.dataset.employeeId || "";
+    shiftDate.value = el.dataset.date || "";
+    start.value = el.dataset.start || "";
+    finish.value = el.dataset.finish || "";
+    save.hidden = false;
+    save.textContent = "Save changes";
+    cancel.disabled = !shiftId.value;
+    form.scrollIntoView({block: "nearest"});
+  }
+
+  document.querySelectorAll(".shift-pick").forEach(function (el) {
+    el.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      selectShift(el);
+    });
+  });
+
+  add.addEventListener("click", function () {
+    setAddMode();
+    employee.focus();
+  });
+})();
+</script>
 
 <script id="roster-live-poll">
 (function () {

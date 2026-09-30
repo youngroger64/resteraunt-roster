@@ -78,9 +78,20 @@ MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# Clocking owns planned-shift storage after a roster is published.
+# Local development talks to the clocking app on port 8000.
+CLOCKING_BASE_URL = os.getenv("CLOCKING_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+ROSTER_INTEGRATION_TOKEN = os.getenv("ROSTER_INTEGRATION_TOKEN", "")
+
 LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "dashboard:index"
 LOGOUT_REDIRECT_URL = "login"
+
+# Separate local apps share a hostname. An unset name keeps the production cookie.
+SESSION_COOKIE_NAME = (
+    os.getenv("ROSTER_SESSION_COOKIE_NAME", "sessionid").strip() or "sessionid"
+)
 
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},

@@ -15,12 +15,6 @@
     and {{ open_shift_count }} open shift{{ open_shift_count|pluralize }}.
   </p>
 
-  {% if roster.status == "published" %}
-    <div class="alert warning">
-      This roster is published. Deleting it will remove it from staff view too.
-    </div>
-  {% endif %}
-
   {% if roster.purpose == "historic" %}
     <div class="alert warning">
       This is a historic roster. Deleting it changes the evidence used
