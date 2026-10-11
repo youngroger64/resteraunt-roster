@@ -17,6 +17,14 @@ class Employee(TimeStampedModel):
     can_work_kitchen = models.BooleanField(default=False)
     can_work_washup = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
+    exclude_from_clocking = models.BooleanField(
+        default=False,
+        verbose_name="Exclude from clocking integration",
+        help_text=(
+            "Keep this employee on the roster, but do not send their "
+            "shifts to the clocking/payroll application."
+        ),
+    )
     notes = models.TextField(blank=True)
 
     class Meta:
@@ -35,3 +43,22 @@ class Employee(TimeStampedModel):
 
     def __str__(self):
         return self.full_name
+
+
+class EmployeeNameAlias(TimeStampedModel):
+    """A spreadsheet spelling a manager has confirmed for one employee."""
+
+    normalised_name = models.CharField(max_length=160, unique=True)
+    employee = models.ForeignKey(
+        Employee,
+        on_delete=models.CASCADE,
+        related_name="name_aliases",
+    )
+
+    class Meta:
+        ordering = ["normalised_name"]
+        verbose_name = "employee name alias"
+        verbose_name_plural = "employee name aliases"
+
+    def __str__(self):
+        return f"{self.normalised_name} → {self.employee}"

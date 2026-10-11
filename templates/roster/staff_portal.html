@@ -117,6 +117,9 @@
 
               <span>
                 {{ row.shift.get_department_display }}
+                {% if row.shift.notes == "Housekeeping" %}
+                  · Housekeeping
+                {% endif %}
               </span>
 
 

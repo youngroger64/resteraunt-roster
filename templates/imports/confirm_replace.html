@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}Replace draft roster{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+  <div>
+    <h1>Replace this draft?</h1>
+    <p class="muted">Week starting {{ plan.week_start }}.</p>
+  </div>
+</div>
+
+{% if error %}
+  <div class="alert error">{{ error }}</div>
+{% endif %}
+
+<div class="alert warning">
+  This draft already has {{ replacement.shifts }} shift{{ replacement.shifts|pluralize }}
+  and {{ replacement.leave }} annual leave day{{ replacement.leave|pluralize }}.
+  Reuploading will replace all of them with this spreadsheet.
+  Employee records, saved name aliases, and clocking exclusions are kept.
+  Other weeks are not changed.
+</div>
+
+<form method="post" action="{% url 'imports:roster_resolve' %}" class="card form-card">
+  {% csrf_token %}
+  <p>
+    <label>
+      <input type="checkbox" name="confirm_replace" value="yes">
+      Replace the existing draft shifts and annual leave
+    </label>
+  </p>
+  <button type="submit" class="btn primary">Replace this draft</button>
+  <button type="submit" class="btn" name="cancel" value="1" formnovalidate>Cancel</button>
+</form>
+
+{% endblock %}

@@ -13,6 +13,7 @@ class EmployeeForm(forms.ModelForm):
             "can_work_restaurant",
             "can_work_bar",
             "is_active",
+            "exclude_from_clocking",
             "notes",
         ]
         widgets = {"notes": forms.Textarea(attrs={"rows": 3})}

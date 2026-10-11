@@ -14,6 +14,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from apps.employees.models import Department, Employee
 from .forms import GeneratePatternRosterForm, RosterWeekForm
 from .models import (
+    AnnualLeave,
     EmployeePattern,
     OpenShift,
     PayrollRecord,
@@ -597,9 +598,12 @@ def roster_detail(request, pk):
 
     show_all = request.GET.get("show") == "all"
 
+    leave_days = set(roster.annual_leave.values_list("employee_id", "date"))
+
     visible_employee_ids = (
         scheduled_employee_ids
         | unresolved_employee_ids
+        | {employee_id for employee_id, _leave_date in leave_days}
     )
 
     if show_all:
@@ -757,6 +761,7 @@ def roster_detail(request, pk):
                 {
                     "day": day,
                     "shifts": shift_map.get((employee.id, day), []),
+                    "annual_leave": (employee.id, day) in leave_days,
                     "issue": unresolved_map.get(
                         (employee.id, day)
                     ),
@@ -1701,6 +1706,7 @@ def save_cell(request, pk):
         not shift_text
         or normalized in {"off", "-", "none"}
     )
+    is_leave = shift_text.strip().lower() == "al"
 
     # --------------------------------------------------------
     # AREA-ONLY ASSIGNMENT
@@ -1724,6 +1730,11 @@ def save_cell(request, pk):
                 "reason": "",
             },
         )
+        AnnualLeave.objects.filter(
+            roster_week=roster,
+            employee=employee,
+            date=shift_date,
+        ).delete()
 
         if request.headers.get("X-Requested-With") == "XMLHttpRequest":
             return JsonResponse(
@@ -1743,7 +1754,7 @@ def save_cell(request, pk):
     # --------------------------------------------------------
     parsed = []
 
-    if not is_off:
+    if not is_off and not is_leave:
         try:
             parsed = list(parse_signature(shift_text))
         except Exception:
@@ -1808,7 +1819,18 @@ def save_cell(request, pk):
 
     created = []
 
-    if is_off:
+    if is_leave:
+        UnresolvedShift.objects.filter(
+            roster_week=roster,
+            employee=employee,
+            date=shift_date,
+        ).delete()
+        AnnualLeave.objects.get_or_create(
+            roster_week=roster,
+            employee=employee,
+            date=shift_date,
+        )
+    elif is_off:
         UnresolvedShift.objects.filter(
             roster_week=roster,
             employee=employee,
@@ -1830,6 +1852,13 @@ def save_cell(request, pk):
             created.append(shift)
 
         UnresolvedShift.objects.filter(
+            roster_week=roster,
+            employee=employee,
+            date=shift_date,
+        ).delete()
+
+    if not is_leave:
+        AnnualLeave.objects.filter(
             roster_week=roster,
             employee=employee,
             date=shift_date,
@@ -2977,6 +3006,8 @@ def _missing_clocking_ids(employees):
         if employee.pk in seen:
             continue
         seen.add(employee.pk)
+        if getattr(employee, "exclude_from_clocking", False):
+            continue
         if not (getattr(employee, "external_id", "") or "").strip():
             names.append(employee.full_name)
     if not names:

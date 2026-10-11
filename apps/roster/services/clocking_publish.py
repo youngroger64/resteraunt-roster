@@ -50,8 +50,19 @@ def format_clocking_warning(warning):
     return message
 
 
+def _roster_only_row(employee, shift_date, start_time="", end_time=""):
+    return {
+        "employee": employee.full_name,
+        "employee_id": employee.pk,
+        "date": shift_date.isoformat(),
+        "start_time": start_time,
+        "end_time": end_time,
+    }
+
+
 def build_clocking_roster_payload(roster):
     shifts = []
+    annual_leave = []
     roster_only = []
 
     for shift in (
@@ -59,18 +70,20 @@ def build_clocking_roster_payload(roster):
         .select_related("employee")
         .order_by("date", "start_time", "employee__first_name")
     ):
+        if shift.employee.exclude_from_clocking:
+            continue
+
         external_id = (shift.employee.external_id or "").strip()
 
         # Employees without a clocking external_id cannot be sent.
         # Validation still reports them. Week publish refuses them.
         if not external_id:
-            roster_only.append({
-                "employee": shift.employee.full_name,
-                "employee_id": shift.employee_id,
-                "date": shift.date.isoformat(),
-                "start_time": shift.start_time.strftime("%H:%M"),
-                "end_time": shift.end_time.strftime("%H:%M"),
-            })
+            roster_only.append(_roster_only_row(
+                shift.employee,
+                shift.date,
+                shift.start_time.strftime("%H:%M"),
+                shift.end_time.strftime("%H:%M"),
+            ))
             continue
 
         shifts.append({
@@ -81,10 +94,28 @@ def build_clocking_roster_payload(roster):
             "end_time": shift.end_time.strftime("%H:%M"),
         })
 
+    for leave in (
+        roster.annual_leave
+        .select_related("employee")
+        .order_by("date", "employee__first_name")
+    ):
+        if leave.employee.exclude_from_clocking:
+            continue
+        external_id = (leave.employee.external_id or "").strip()
+        if not external_id:
+            roster_only.append(_roster_only_row(leave.employee, leave.date))
+            continue
+        annual_leave.append({
+            "employee_number": external_id,
+            "external_leave_id": str(leave.pk),
+            "date": leave.date.isoformat(),
+        })
+
     return {
         "week_start": roster.week_start.isoformat(),
         "version": roster.version,
         "shifts": shifts,
+        "annual_leave": annual_leave,
         "roster_only": roster_only,
     }
 
@@ -207,6 +238,7 @@ def publish_week_to_clocking(roster):
             "week_start": payload["week_start"],
             "version": payload["version"],
             "shifts": payload["shifts"],
+            "annual_leave": payload["annual_leave"],
         },
     )
     return _ensure_accepted(result)
@@ -214,6 +246,30 @@ def publish_week_to_clocking(roster):
 
 def publish_employee_roster_to_clocking(roster, employee, removed_shift_ids=None):
     external_id = (employee.external_id or "").strip()
+
+    if employee.exclude_from_clocking:
+        if not external_id:
+            return {
+                "published": True,
+                "fully_applied": True,
+                "warnings": [],
+            }
+        removed_ids = {
+            str(pk)
+            for pk in roster.shifts.filter(employee=employee).values_list("pk", flat=True)
+        }
+        removed_ids.update(str(pk) for pk in (removed_shift_ids or []))
+        result = _post_json(
+            "/api/v1/roster/publish-employee/",
+            {
+                "week_start": roster.week_start.isoformat(),
+                "employee_number": external_id,
+                "shifts": [],
+                "annual_leave": [],
+                "removed_external_shift_ids": sorted(removed_ids),
+            },
+        )
+        return _ensure_accepted(result)
 
     if not external_id:
         raise ClockingPublishError(
@@ -237,10 +293,20 @@ def publish_employee_roster_to_clocking(roster, employee, removed_shift_ids=None
             "end_time": shift.end_time.strftime("%H:%M"),
         })
 
+    annual_leave = [
+        {
+            "employee_number": external_id,
+            "external_leave_id": str(leave.pk),
+            "date": leave.date.isoformat(),
+        }
+        for leave in roster.annual_leave.filter(employee=employee).order_by("date")
+    ]
+
     payload = {
         "week_start": roster.week_start.isoformat(),
         "employee_number": external_id,
         "shifts": shifts,
+        "annual_leave": annual_leave,
     }
     if removed_ids:
         payload["removed_external_shift_ids"] = [str(pk) for pk in removed_ids]

@@ -483,9 +483,11 @@
                     data-date="{{ cell.day|date:'Y-m-d' }}"
                     data-start="{{ shift.start_time|time:'H:i' }}"
                     data-finish="{{ shift.end_time|time:'H:i' }}">
-                {{ shift.start_time|time:"H:i" }}–{{ shift.end_time|time:"H:i" }}
+                {{ shift.start_time|time:"H:i" }}–{{ shift.end_time|time:"H:i" }}{% if shift.notes == "Housekeeping" %} · Housekeeping{% endif %}
               </span>
             {% endfor %}
+          {% elif cell.annual_leave %}
+            <span class="cell-shift-line">AL</span>
           {% else %}
             <span class="cell-off">OFF</span>
           {% endif %}
@@ -494,7 +496,7 @@
         <div class="cell-inline-editor" hidden>
           <input class="cell-input"
                  name="shift_text"
-                 value="{% if cell.shifts %}{% for shift in cell.shifts %}{{ shift.start_time|time:'H:i' }}-{{ shift.end_time|time:'H:i' }}{% if not forloop.last %}, {% endif %}{% endfor %}{% else %}OFF{% endif %}"
+                 value="{% if cell.shifts %}{% for shift in cell.shifts %}{{ shift.start_time|time:'H:i' }}-{{ shift.end_time|time:'H:i' }}{% if not forloop.last %}, {% endif %}{% endfor %}{% elif cell.annual_leave %}AL{% else %}OFF{% endif %}"
                  autocomplete="off">
 
           <small>Click elsewhere to save</small>
@@ -509,10 +511,14 @@
                 data-date="{{ cell.day|date:'Y-m-d' }}"
                 data-start="{{ shift.start_time|time:'H:i' }}"
                 data-finish="{{ shift.end_time|time:'H:i' }}">
-          {{ shift.start_time|time:"H:i" }}–{{ shift.end_time|time:"H:i" }}
+          {{ shift.start_time|time:"H:i" }}–{{ shift.end_time|time:"H:i" }}{% if shift.notes == "Housekeeping" %} · Housekeeping{% endif %}
         </button>
       {% empty %}
-        <span class="off">—</span>
+        {% if cell.annual_leave %}
+          <span class="cell-shift-line">AL</span>
+        {% else %}
+          <span class="off">—</span>
+        {% endif %}
       {% endfor %}
     {% endif %}
   </td>

@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+
+{% block title %}Resolve roster names{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+  <div>
+    <h1>Resolve roster names</h1>
+    <p class="muted">
+      Week starting {{ plan.week_start }}. Nothing is saved until every name has a choice.
+    </p>
+  </div>
+</div>
+
+{% if error %}
+  <div class="alert error">{{ error }}</div>
+{% endif %}
+
+{% if replacement %}
+  <div class="alert warning">
+    This draft already has {{ replacement.shifts }} shift{{ replacement.shifts|pluralize }}
+    and {{ replacement.leave }} annual leave day{{ replacement.leave|pluralize }}.
+    Reuploading will replace all of them with this spreadsheet.
+    Employee records, saved name aliases, and clocking exclusions are kept.
+    Other weeks are not changed.
+  </div>
+{% endif %}
+
+<form method="post" action="{% url 'imports:roster_resolve' %}" class="card form-card">
+  {% csrf_token %}
+
+  {% for person in unresolved %}
+    <fieldset class="card">
+      <legend>{{ person.name }}</legend>
+
+      {% if person.reserved_external_id %}
+        <p>
+          This spelling is reserved for clocking ID {{ person.reserved_external_id }},
+          which is not on the roster yet. Add that employee before importing this name.
+        </p>
+      {% elif person.ambiguous %}
+        <p>This name matches more than one employee. Choose one, or keep them on the roster only.</p>
+      {% endif %}
+
+      {% if person.candidates %}
+        <ul>
+          {% for candidate in person.candidates %}
+            <li>
+              {{ candidate.name }}
+              — roster {{ candidate.id }}
+              — clocking {% if candidate.external_id %}{{ candidate.external_id }}{% else %}no clocking ID{% endif %}
+              {% if candidate.same_first %}
+                — first name matches
+              {% else %}
+                — {{ candidate.score }}%
+              {% endif %}
+              <button type="button"
+                      data-pick-employee="{{ candidate.id }}"
+                      data-pick-target="employees-{{ forloop.parentloop.counter }}"
+                      data-pick-radio="choice-{{ forloop.parentloop.counter }}-existing">
+                Use {{ candidate.name }}
+              </button>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p>No similar names. Search the full employee list, create a new employee, or keep them on the roster only.</p>
+      {% endif %}
+
+      <p>
+        <label>
+          <input id="choice-{{ forloop.counter }}-existing"
+                 type="radio"
+                 name="choice-{{ person.key }}"
+                 value="use_existing"
+                 required>
+          Use existing employee
+        </label>
+      </p>
+      <p>
+        <label for="employees-{{ forloop.counter }}">Search all employees</label>
+        <input type="search"
+               placeholder="Search employees"
+               aria-label="Search all employees"
+               data-employee-filter="employees-{{ forloop.counter }}"
+               autocomplete="off">
+        <select id="employees-{{ forloop.counter }}" name="employee-{{ person.key }}">
+          <option value="">Select an employee</option>
+          {% for employee in employees %}
+            <option value="{{ employee.pk }}">
+              {{ employee.full_name }}
+              — roster {{ employee.pk }}
+              — clocking {% if employee.external_id %}{{ employee.external_id }}{% else %}no clocking ID{% endif %}
+            </option>
+          {% endfor %}
+        </select>
+      </p>
+      <p>
+        <label>
+          <input type="radio" name="choice-{{ person.key }}" value="create">
+          Create new employee
+        </label>
+      </p>
+      <p>
+        <label>
+          <input type="radio" name="choice-{{ person.key }}" value="roster_only">
+          Roster only — exclude from payroll
+        </label>
+      </p>
+    </fieldset>
+  {% endfor %}
+
+  {% if replacement %}
+    <p>
+      <label>
+        <input type="checkbox" name="confirm_replace" value="yes">
+        Replace the existing draft shifts and annual leave
+      </label>
+    </p>
+  {% endif %}
+
+  <button type="submit" class="btn primary">Apply roster import</button>
+  <button type="submit" class="btn" name="cancel" value="1" formnovalidate>Cancel</button>
+</form>
+
+<script>
+document.querySelectorAll("[data-employee-filter]").forEach(function (input) {
+  input.addEventListener("input", function () {
+    var select = document.getElementById(input.getAttribute("data-employee-filter"));
+    var query = input.value.toLowerCase();
+    Array.prototype.forEach.call(select.options, function (option) {
+      var text = option.text.toLowerCase();
+      option.hidden = Boolean(query && option.value && text.indexOf(query) === -1);
+    });
+  });
+});
+document.querySelectorAll("[data-pick-employee]").forEach(function (button) {
+  button.addEventListener("click", function () {
+    var select = document.getElementById(button.getAttribute("data-pick-target"));
+    var radio = document.getElementById(button.getAttribute("data-pick-radio"));
+    if (select) {
+      select.value = button.getAttribute("data-pick-employee");
+    }
+    if (radio) {
+      radio.checked = true;
+    }
+  });
+});
+</script>
+
+{% endblock %}

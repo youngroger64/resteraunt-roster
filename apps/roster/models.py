@@ -81,6 +81,34 @@ class Shift(TimeStampedModel):
     def __str__(self):
         return f"{self.employee} — {self.date} {self.display_time}"
 
+
+class AnnualLeave(TimeStampedModel):
+    """A paid-leave day from the roster. It is not a worked shift."""
+
+    roster_week = models.ForeignKey(
+        RosterWeek,
+        on_delete=models.CASCADE,
+        related_name="annual_leave",
+    )
+    employee = models.ForeignKey(
+        Employee,
+        on_delete=models.PROTECT,
+        related_name="annual_leave",
+    )
+    date = models.DateField()
+
+    class Meta:
+        ordering = ["date", "employee__first_name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["roster_week", "employee", "date"],
+                name="unique_annual_leave_day",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.employee} — {self.date} annual leave"
+
 class EmployeePattern(TimeStampedModel):
     employee = models.OneToOneField(Employee, on_delete=models.CASCADE, related_name="learned_pattern")
     weeks_seen = models.PositiveSmallIntegerField(default=0)
